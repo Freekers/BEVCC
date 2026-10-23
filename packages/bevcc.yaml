@@ -87,9 +87,10 @@ input_number:
     step: 0.01
     mode: box
     icon: mdi:cash-fast
-  # Netafname (zonder de auto) die nodig is voor een boost. Houdt het EMS het
-  # netvermogen constant als de auto start, zet dit dan dicht bij het
-  # laadvermogen van de auto, zodat de import de auto dekt.
+  # Netafname (zonder de auto) die nodig is voor een boost. Een lopende boost
+  # stopt als de netafname (met de auto) onder deze waarde - 1 kW zakt.
+  # Houdt het EMS het netvermogen constant als de auto start, zet dit dan dicht
+  # bij het laadvermogen van de auto, zodat de import de auto dekt.
   bevcc_boost_min_import:
     name: "BEVCC boost minimale EMS-import"
     unit_of_measurement: "kW"
@@ -470,9 +471,11 @@ template:
       #   - alleen bij 'Boost bij' = 'aFRR + onbalans': de import duurt al 90 s.
       # Doorgaan zolang:
       #   - de prijs onder 'Boost onder' + 0,02 blijft, en
-      #   - het net nog meer dan 1 kW levert. Waar zolang het EMS importeert
-      #     (met elk vermogen) of de accu stil houdt; onwaar zodra de accu huis
-      #     en auto alleen dekt (eigen verbruik houdt het net rond 0), en
+      #   - de netafname boven 'Boost min. EMS-import' - 1 kW blijft (minimaal
+      #     0 kW). Hier telt de auto wel mee: tijdens een import houdt het EMS
+      #     vaak het netvermogen vast en laadt de accu minder zodra de auto
+      #     start. Zakt de netafname hieronder, dan voedt vooral de thuisaccu
+      #     de auto en is de goedkope import (grotendeels) voorbij, en
       #   - de thuisaccu boven de ondergrens - 2 % blijft (onbekend -> stop), en
       #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt.
       # 2 min uitstelvertraging tegen korte dips, 10 min rust na een boost.
@@ -494,8 +497,8 @@ template:
           {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
           {% set ook_onbalans = is_state('input_select.bevcc_boost_bij', 'aFRR + onbalans') %}
           {% if this.state == 'on' %}
-            {{ prijs < grens + 0.02 and net > 1000 and soc >= ondergrens - 2
-               and (sessie or ook_onbalans) }}
+            {{ prijs < grens + 0.02 and net > [min_import - 1000, 0] | max
+               and soc >= ondergrens - 2 and (sessie or ook_onbalans) }}
           {% else %}
             {{ grens > -0.5 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
                and (sessie or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
@@ -526,7 +529,7 @@ template:
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.1.0"
+        state: "1.2.0"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"

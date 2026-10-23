@@ -58,8 +58,9 @@ modus, en alleen om prijsredenen.
 Een boost stopt (2 minuten vertraging tegen korte dips) zodra:
 
 - de prijs op of boven *Boost onder* + € 0,02 komt, of
-- het net minder dan 1 kW levert: het EMS importeert niet meer en de thuisaccu
-  voedt de auto, of
+- de netafname (met de auto) onder *Boost min. EMS-import* − 1 kW zakt (standaard
+  2 − 1 = 1 kW): het EMS importeert (bijna) niet meer en vooral de thuisaccu voedt de
+  auto, of
 - de thuisaccu onder de *ondergrens* − 2 % zakt, of
 - bij *Boost bij* = *alleen aFRR*: de aFRR-importsessie eindigt.
 
@@ -173,7 +174,7 @@ updates.
 | Pauze boven | `input_number.bevcc_pauze_boven` | € 0,35 | All-in prijs waarboven het laden pauzeert. |
 | Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op het minimum (− € 0,50) staat boost uit. |
 | Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + onbalans*: ook bij andere EMS-import. Zie [ontwerpkeuzes](#alleen-afrr-of-ook-onbalans). |
-| Boost min. EMS-import | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. |
+| Boost min. EMS-import | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. |
 | Accu-ondergrens | `input_number.bevcc_accu_ondergrens` | 50 % | Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder. |
 | Energiebelasting | `input_number.bevcc_energiebelasting` | € 0,11085 | Per kWh incl. btw, 2026, eerste schijf. **Elk jaar per 1 januari bijwerken.** |
 | Leverkosten | `input_number.bevcc_leverkosten` | € 0,02 | Opslag van Balans per kWh incl. btw. |
@@ -287,8 +288,9 @@ Tijdens een EMS-import houdt het EMS vaak het netvermogen vast. Gaat de auto lad
 kan de thuisaccu (deels) de auto voeden in plaats van het net. EVCC's eigen instellingen
 voor de thuisbatterij (voorrang, buffer) gelden alleen bij laden op zonne-energie, niet
 in Snel. Daarom start een boost alleen als de thuisaccu op of boven de ondergrens zit, en
-stopt hij 2 % eronder. Daarnaast stopt een boost als het net minder dan 1 kW levert: dan
-dekt de thuisaccu het verbruik van huis en auto, en is er geen goedkope import meer.
+stopt hij 2 % eronder. Daarnaast stopt een boost als de netafname onder *Boost min.
+EMS-import* − 1 kW zakt: dan dekt vooral de thuisaccu het verbruik van huis en auto, en is
+de goedkope import (grotendeels) voorbij.
 
 Wil je dat de import de auto helemaal dekt, zet *Boost min. EMS-import* dan dicht bij het
 laadvermogen van je auto.
@@ -298,6 +300,14 @@ laadvermogen van je auto.
 BEVCC ziet een EMS-import als de thuisaccu met meer dan 500 W laadt en de netafname
 zonder de auto boven *Boost min. EMS-import* ligt. Laden op zonne-energie valt daarmee af:
 dan is de netafname laag of negatief.
+
+Starten en doorgaan meten bewust iets anders. Bij de start telt de auto niet mee: de
+import moet echt van het EMS komen. Tijdens de boost telt de auto wel mee: het EMS houdt
+tijdens een import vaak het netvermogen vast en laadt de thuisaccu minder (of ontlaadt
+hem) zodra de auto start. De netafname zonder de auto kan dan tot onder nul zakken terwijl
+de goedkope import gewoon doorloopt. Daarom blijft een boost lopen zolang het net meer
+levert dan *Boost min. EMS-import* − 1 kW. Die 1 kW marge werkt net als de € 0,02 bij de
+prijs: korte schommelingen in het importvermogen beëindigen de boost niet.
 
 ### Robuust schakelen
 
@@ -313,8 +323,9 @@ dan is de netafname laag of negatief.
   BEVCC verwacht, dan zet BEVCC de modus opnieuw. Valt de prijs weg tijdens een pauze,
   dan blijft de pauze nog 15 minuten staan en geeft BEVCC daarna EVCC weer vrij.
 - **Hysterese.** Een pauze eindigt pas als de prijs 2 minuten onder *Pauze boven* −
-  € 0,02 ligt; een boost heeft dezelfde marge, en daarna 10 minuten rust. Zo wisselt EVCC
-  niet bij elke minuutprijs van modus.
+  € 0,02 ligt; een boost heeft dezelfde marge op de prijs, 1 kW marge op het
+  importvermogen, en daarna 10 minuten rust. Zo wisselt EVCC niet bij elke minuutprijs of
+  schommeling in het vermogen van modus.
 - **Snel = `now`.** EVCC toont *Snel*, maar de waarde in de API is `now`. BEVCC leest de
   beschikbare waarden van de modus-entiteit en gebruikt de juiste.
 

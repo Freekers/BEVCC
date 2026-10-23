@@ -124,6 +124,15 @@ def test_ems_import():
     (dict(IMPORT, soc=48.5), "on", 60, True),                        # doorgaan: >= ondergrens - 2
     (dict(IMPORT, soc=47), "on", 60, False),                         # stoppen: < ondergrens - 2
     (dict(net=30, accu=10500, auto_kw=10, kaal=52.8), "on", 60, False),  # accu voedt de auto
+    # doorgaan zolang netafname (met auto) > Boost min. EMS-import - 1 kW (minimaal 0)
+    (dict(net=1500, accu=8000, auto_kw=10, kaal=52.8), "on", 60, True),             # min 2 -> grens 1 kW
+    (dict(net=900, accu=9000, auto_kw=10, kaal=52.8), "on", 60, False),
+    (dict(net=7500, accu=2000, auto_kw=10, kaal=52.8, min_import=8), "on", 60, True),  # min 8 -> grens 7 kW
+    (dict(net=6500, accu=3000, auto_kw=10, kaal=52.8, min_import=8), "on", 60, False),
+    (dict(net=200, accu=9500, auto_kw=10, kaal=52.8, min_import=0.5), "on", 60, True),  # min 0,5 -> grens 0
+    (dict(net=-100, accu=9800, auto_kw=10, kaal=52.8, min_import=0.5), "on", 60, False),
+    # EMS houdt het net op 5 kW, auto 10 kW: netafname zonder auto negatief, boost loopt door
+    (dict(net=5000, accu=5500, auto_kw=10, kaal=52.8, sessie="on", boost_bij="alleen aFRR"), "on", 60, True),
 ])
 def test_goedkope_import(kw, this, leeftijd, verwacht):
     assert bs(GI, base(**kw), this, leeftijd) is verwacht

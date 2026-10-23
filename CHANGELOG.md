@@ -5,6 +5,10 @@ Alle noemenswaardige wijzigingen in BEVCC. Versies volgen
 (2.0.0) betekent dat je iets moet aanpassen (bijvoorbeeld in secrets.yaml of je
 dashboard); dat staat dan bij die versie.
 
+## [1.2.0] - 2026-10-23
+
+Boost stopt nu wanneer de import van het net onder de 'Boost min. EMS-import' − 1 kW daalt, maar nooit minder dan 0 kW.
+
 ## [1.1.0] - 2026-10-23
 
 Update mechanisme verbeterd
