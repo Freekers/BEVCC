@@ -192,7 +192,10 @@ op de standaardwaarden.
 3. Vervang `/config/packages/bevcc.yaml` door de nieuwe versie, controleer de
    configuratie en herstart Home Assistant. Vervang zo nodig ook de dashboardkaart.
 
-Je instellingen blijven staan: ze zitten in Home Assistant, niet in het bestand.
+De melding en de balk verdwijnen vanzelf zodra de nieuwe versie draait; je hoeft niets weg
+te klikken. Klik je de melding weg zonder bij te werken, dan komt ze terug na een herstart
+of bij een nog nieuwere release. Je instellingen blijven staan: ze zitten in Home
+Assistant, niet in het bestand.
 
 ### Waarom niet via HACS?
 
@@ -412,14 +415,18 @@ pytest
 ```
 
 Bij elke push controleert GitHub Actions daarnaast het package met de
-configuratiecontrole van Home Assistant (`hass --script check_config`).
+configuratiecontrole van Home Assistant (`check_config`), in de officiële
+Home Assistant-container (`stable`).
 
 Bijdragen zijn welkom via issues en pull requests. Plak daarbij nooit je cookie, je
 `secrets.yaml` of ruwe API-antwoorden met accountgegevens.
 
 Een nieuwe versie uitbrengen: verhoog de versie in `sensor.bevcc_versie` in
 [`packages/bevcc.yaml`](packages/bevcc.yaml), zet de wijzigingen bovenaan de
-[CHANGELOG](CHANGELOG.md) en maak op GitHub een release met tag `vX.Y.Z`.
+[CHANGELOG](CHANGELOG.md) en maak op GitHub een release met tag `vX.Y.Z`. De tag moet
+gelijk zijn aan de versie in het package: anders blijft de updatemelding na het bijwerken
+staan of verschijnt ze niet. De workflow *Release-controle* controleert dat bij elke
+release.
 
 ## Dankwoord
 

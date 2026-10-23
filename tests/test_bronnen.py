@@ -174,13 +174,35 @@ def test_prijspiek_waarde():
 UPDATE = ha.find("binary_sensor", "BEVCC update beschikbaar")
 
 
+def update(laatste, geinstalleerd="1.0.0", bekend=None):
+    """(staat, attribuut laatste_versie) van binary_sensor.bevcc_update_beschikbaar."""
+    db = {"sensor.bevcc_laatste_versie": S(laatste), "sensor.bevcc_versie": S(geinstalleerd)}
+    this = S("off", {} if bekend is None else {"laatste_versie": bekend})
+    staat = ha.truthy(ha.render(UPDATE["state"], db, this=this))
+    return staat, ha.render(UPDATE["attributes"]["laatste_versie"], db, this=this)
+
+
 @pytest.mark.parametrize("laatste, verwacht", [
     ("1.0.0", False), ("1.0.1", True), ("1.10.0", True), ("0.9.9", False),
     ("2.0.0-beta", True), ("unavailable", False), ("unknown", False),
 ])
 def test_update_beschikbaar(laatste, verwacht):
-    db = {"sensor.bevcc_laatste_versie": S(laatste), "sensor.bevcc_versie": S("1.0.0")}
-    assert ha.truthy(ha.render(UPDATE["state"], db)) is verwacht
+    assert update(laatste)[0] is verwacht
+
+
+def test_update_verdwijnt_na_bijwerken():
+    assert update("1.1.0", "1.0.0") == (True, "1.1.0")
+    assert update("1.1.0", "1.1.0") == (False, "1.1.0")
+
+
+def test_update_blijft_bij_github_storing():
+    # GitHub even onbereikbaar: laatst bekende release blijft gelden
+    assert update("unavailable", "1.0.0", bekend="1.1.0") == (True, "1.1.0")
+    assert update("unavailable", "1.1.0", bekend="1.1.0") == (False, "1.1.0")
+
+
+def test_update_nog_nieuwere_release():
+    assert update("1.2.0", "1.0.0", bekend="1.1.0") == (True, "1.2.0")
 
 
 def test_laatste_versie_zonder_v():

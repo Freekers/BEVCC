@@ -108,7 +108,7 @@ cards:
     card:
       type: markdown
       content: |
-        <ha-alert alert-type="info">BEVCC {{ states('sensor.bevcc_laatste_versie') }} is beschikbaar (geïnstalleerd: {{ states('sensor.bevcc_versie') }}).</ha-alert>
+        <ha-alert alert-type="info">BEVCC {{ state_attr('binary_sensor.bevcc_update_beschikbaar', 'laatste_versie') }} is beschikbaar (geïnstalleerd: {{ states('sensor.bevcc_versie') }}).</ha-alert>
 
   # --- Toestand ---
   - type: grid

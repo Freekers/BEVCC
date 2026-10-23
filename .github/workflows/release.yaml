@@ -1,0 +1,29 @@
+name: Release-controle
+
+# De updatemelding vergelijkt de tag van de nieuwste release met
+# sensor.bevcc_versie in het package. Wijken die af, dan blijft de melding na
+# het bijwerken staan (of verschijnt ze niet). Deze controle faalt dan meteen.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  versie:
+    name: Tag gelijk aan versie in het package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vergelijken
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          versie=$(grep -A4 'name: "BEVCC versie"' packages/bevcc.yaml | sed -n 's/.*state: "\(.*\)".*/\1/p')
+          changelog=$(sed -n 's/^## \[\{0,1\}v\{0,1\}\([0-9][0-9.]*\).*/\1/p' CHANGELOG.md | head -n 1)
+          echo "tag: $tag, package: $versie, CHANGELOG: $changelog"
+          if [ "$tag" != "$versie" ] || [ "$tag" != "$changelog" ]; then
+            echo "::error::Tag v$tag komt niet overeen met sensor.bevcc_versie ($versie) of de CHANGELOG ($changelog)."
+            exit 1
+          fi

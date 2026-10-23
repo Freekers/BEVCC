@@ -532,15 +532,24 @@ template:
       - name: "BEVCC update beschikbaar"
         unique_id: bevcc_update_beschikbaar
         device_class: update
+        # Aan zolang de nieuwste release op GitHub nieuwer is dan de geïnstalleerde
+        # versie; gaat vanzelf uit na het bijwerken (bestand vervangen + herstart).
         # Versies vergeleken als getallen (1.10.0 > 1.9.0); '-beta' e.d. genegeerd.
+        # Is GitHub even onbereikbaar, dan geldt de laatst bekende release, zodat
+        # de melding niet verdwijnt en terugkomt.
         state: >-
-          {% set nieuw = states('sensor.bevcc_laatste_versie') %}
+          {% set n = states('sensor.bevcc_laatste_versie') %}
+          {% set nieuw = n if n not in ['unknown', 'unavailable', ''] else this.attributes.get('laatste_versie', '') %}
           {% set huidig = states('sensor.bevcc_versie') %}
-          {% if nieuw in ['unknown', 'unavailable', ''] %}false
+          {% if not nieuw %}false
           {% else %}
             {{ nieuw.split('-')[0].split('.') | map('int', 0) | list
                > huidig.split('-')[0].split('.') | map('int', 0) | list }}
           {% endif %}
+        attributes:
+          laatste_versie: >-
+            {% set n = states('sensor.bevcc_laatste_versie') %}
+            {{ n if n not in ['unknown', 'unavailable', ''] else this.attributes.get('laatste_versie', '') }}
 
 # -----------------------------------------------------------------------------
 # 6. Automatiseringen
@@ -896,28 +905,41 @@ automation:
                 bevcc_balans_cookie in secrets.yaml en herlaad 'RESTful'
                 (Ontwikkelhulpmiddelen → YAML).
 
-  # Nieuwe BEVCC-versie beschikbaar
+  # Nieuwe BEVCC-versie beschikbaar. De melding verdwijnt vanzelf zodra de
+  # nieuwe versie geïnstalleerd is; na wegklikken komt ze terug bij een
+  # herstart of een nog nieuwere release.
   - id: bevcc_update_melding
     alias: "BEVCC update-melding"
-    mode: single
+    mode: queued
+    max: 5
     triggers:
       - trigger: state
         entity_id: binary_sensor.bevcc_update_beschikbaar
-        to: "on"
+        to: ["on", "off"]
+      # nog nieuwere release terwijl de vorige nog niet geïnstalleerd is
+      - trigger: state
+        entity_id: binary_sensor.bevcc_update_beschikbaar
+        attribute: laatste_versie
       # meldingen overleven geen herstart
       - trigger: homeassistant
         event: start
-    conditions:
-      - condition: state
-        entity_id: binary_sensor.bevcc_update_beschikbaar
-        state: "on"
     actions:
-      - action: persistent_notification.create
-        data:
-          notification_id: bevcc_update
-          title: BEVCC-update beschikbaar
-          message: >-
-            BEVCC {{ states('sensor.bevcc_laatste_versie') }} is beschikbaar
-            (geïnstalleerd: {{ states('sensor.bevcc_versie') }}). Lees de wijzigingen op
-            https://github.com/Freekers/BEVCC/releases en vervang daarna
-            packages/bevcc.yaml (en eventueel de dashboardkaart).
+      - if:
+          - condition: state
+            entity_id: binary_sensor.bevcc_update_beschikbaar
+            state: "on"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: bevcc_update
+              title: BEVCC-update beschikbaar
+              message: >-
+                BEVCC {{ state_attr('binary_sensor.bevcc_update_beschikbaar', 'laatste_versie') }}
+                is beschikbaar (geïnstalleerd: {{ states('sensor.bevcc_versie') }}). Lees de
+                wijzigingen op https://github.com/Freekers/BEVCC/releases, vervang
+                packages/bevcc.yaml (en eventueel de dashboardkaart) en herstart Home
+                Assistant. Deze melding verdwijnt daarna vanzelf.
+        else:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: bevcc_update
