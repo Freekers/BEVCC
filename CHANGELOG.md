@@ -5,6 +5,10 @@ Alle noemenswaardige wijzigingen in BEVCC. Versies volgen
 (2.0.0) betekent dat je iets moet aanpassen (bijvoorbeeld in secrets.yaml of je
 dashboard); dat staat dan bij die versie.
 
+## [1.1.0] - 2026-10-23
+
+Update mechanisme verbeterd
+
 ## [1.0.0] - 2026-10-23
 
 Eerste publieke versie.
