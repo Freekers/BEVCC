@@ -1,0 +1,923 @@
+# =============================================================================
+# BEVCC - Balans Energie EVCC Companion
+# https://github.com/Freekers/BEVCC
+#
+# Fanproject: niet officieel en niet gelieerd aan Balans Energie.
+# "Balans Energie" is een handelsmerk van Balans Energie. Gebruik op eigen risico.
+#
+# EVCC blijft de baas over je laadpunt. BEVCC verandert alleen de EVCC-modus
+# om prijsredenen, en zet daarna de modus terug die er stond:
+#
+#   pauze  (modus -> Uit)    prijspiek: all-in afnameprijs boven 'Pauze boven'
+#                            (vanuit Smart en Snel)
+#   boost  (modus -> Snel)   goedkope EMS-import: het Balans-EMS laadt de
+#                            thuisaccu uit het net, de all-in prijs ligt onder
+#                            'Boost onder' en de thuisaccu zit op of boven de
+#                            ondergrens (alleen vanuit Smart)
+#
+#   Een prijspiek gaat altijd voor een boost.
+#   BEVCC houdt geen rekening met vertrektijd of gewenste laadtoestand: een
+#   pauze gaat ook door tijdens een laadplan in EVCC.
+#   Zet alle tarief- en prijsgrenzen in EVCC uit (zie README.md).
+#   Verander je zelf de modus tijdens een pauze/boost, dan stapt BEVCC opzij
+#   tot die pauze/boost-situatie voorbij is.
+#
+# Prijs voor de beslissingen (sensor.bevcc_afnameprijs), per minuut:
+#   - tijdens een aFRR-importsessie van jouw EMS (alleen Balans weet dat, via
+#     de Balans-API): de live onbalansprijs 'Invoeden'. Die kolom bevat de
+#     afregelprijs, en daartegen wordt aFRR-import afgerekend.
+#   - anders: de live onbalansprijs 'Afnemen'.
+#   (TenneT-gegevens per minuut, via services.tenergy.nl)
+#   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans.
+#
+# Installatie en uitleg: zie README.md. Kort:
+#   1. secrets.yaml:
+#        bevcc_balans_cookie: "<Cookie-header van een ingelogde sessie op
+#                              dashboard.balansenergie.nl>"
+#        bevcc_evcc_prefix: "evcc"       # naam van je EVCC-integratie
+#        bevcc_evcc_laadpunt: "alfen"    # zoals in select.evcc_alfen_mode
+#   2. Dit bestand in /config/packages/, met in configuration.yaml:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   3. Configuratie controleren en Home Assistant herstarten.
+#
+# Dit bestand hoef je niet aan te passen: instellingen staan in secrets.yaml
+# en in de helpers (via het dashboard). Een update = dit bestand vervangen.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 0. Configuratie en instellingen
+# -----------------------------------------------------------------------------
+input_text:
+  # Uit secrets.yaml; bij elke herstart opnieuw ingelezen.
+  bevcc_evcc_prefix:
+    name: "BEVCC EVCC-prefix"
+    icon: mdi:cog
+    max: 32
+    initial: !secret bevcc_evcc_prefix
+  bevcc_evcc_laadpunt:
+    name: "BEVCC EVCC-laadpunt"
+    icon: mdi:ev-station
+    max: 32
+    initial: !secret bevcc_evcc_laadpunt
+  # Status, beheerd door de automatisering.
+  bevcc_te_herstellen_modus:
+    name: "BEVCC te herstellen EVCC-modus"
+    icon: mdi:backup-restore
+    max: 16
+
+# Geen 'initial': wijzigingen via het dashboard blijven bewaard, ook bij
+# updates. Standaardwaarden zet de automatisering 'BEVCC standaardwaarden'
+# eenmalig (zie sectie 6).
+input_number:
+  bevcc_pauze_boven:
+    name: "BEVCC pauze boven (all-in)"
+    unit_of_measurement: "EUR/kWh"
+    min: 0.10
+    max: 1.50
+    step: 0.01
+    mode: box
+    icon: mdi:cash-lock
+  # -0,50 (minimum) = boost uit
+  bevcc_boost_onder:
+    name: "BEVCC boost onder (all-in)"
+    unit_of_measurement: "EUR/kWh"
+    min: -0.50
+    max: 0.50
+    step: 0.01
+    mode: box
+    icon: mdi:cash-fast
+  # Netafname (zonder de auto) die nodig is voor een boost. Houdt het EMS het
+  # netvermogen constant als de auto start, zet dit dan dicht bij het
+  # laadvermogen van de auto, zodat de import de auto dekt.
+  bevcc_boost_min_import:
+    name: "BEVCC boost minimale EMS-import"
+    unit_of_measurement: "kW"
+    min: 0.5
+    max: 16
+    step: 0.5
+    mode: box
+    icon: mdi:transmission-tower-import
+  # Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder.
+  bevcc_accu_ondergrens:
+    name: "BEVCC thuisaccu-ondergrens voor boost"
+    unit_of_measurement: "%"
+    min: 0
+    max: 100
+    step: 1
+    mode: box
+    icon: mdi:home-battery-outline
+  # Energiebelasting incl. btw per kWh. Elk jaar per 1 januari bijwerken;
+  # 2026, schijf 1 (t/m 10.000 kWh): 0,11085.
+  bevcc_energiebelasting:
+    name: "BEVCC energiebelasting (incl. btw)"
+    unit_of_measurement: "EUR/kWh"
+    min: 0
+    max: 0.5
+    step: 0.00001
+    mode: box
+    icon: mdi:bank
+  # Leverkosten (opslag) van Balans Energie per kWh, incl. btw (0,02).
+  bevcc_leverkosten:
+    name: "BEVCC leverkosten (incl. btw)"
+    unit_of_measurement: "EUR/kWh"
+    min: 0
+    max: 0.1
+    step: 0.001
+    mode: box
+    icon: mdi:cash-plus
+
+input_select:
+  # Welke EMS-import een boost mag starten:
+  #   alleen aFRR      alleen tijdens een aFRR-importsessie van Balans. De
+  #                    aFRR-importprijs is de afregelprijs, en die kan binnen
+  #                    het kwartier alleen nog dalen.
+  #   aFRR + onbalans  ook bij andere EMS-import, afgerekend tegen de
+  #                    onbalansprijs 'Afnemen', die aan het eind van het
+  #                    kwartier nog kan stijgen (bijvoorbeeld regeltoestand 2).
+  bevcc_boost_bij:
+    name: "BEVCC boost bij"
+    icon: mdi:source-branch-check
+    options:
+      - alleen aFRR
+      - aFRR + onbalans
+  # Status, beheerd door de automatisering - niet zelf wijzigen.
+  bevcc_status:
+    name: "BEVCC status"
+    icon: mdi:state-machine
+    options:
+      - rust
+      - pauze
+      - boost
+      - handmatig
+
+input_boolean:
+  # Uit = standaardwaarden worden (opnieuw) ingesteld; zie sectie 6.
+  bevcc_standaardwaarden:
+    name: "BEVCC standaardwaarden ingesteld"
+    icon: mdi:restore
+
+# -----------------------------------------------------------------------------
+# 1. Bronnen
+# -----------------------------------------------------------------------------
+rest:
+  # Balans Energie klantprijzen (onofficiële API, één verzoek per minuut).
+  # Lopend kwartier = het prices[]/afrrDiscovery[]-item waarvan start (ms
+  # sinds 1970) het begin van het lopende kwartier is. Een antwoord dat geen
+  # JSON is (verlopen cookie -> inlogpagina) maakt deze sensoren unavailable.
+  - resource: https://dashboard.balansenergie.nl/customer/current-prices/api/
+    headers:
+      Cookie: !secret bevcc_balans_cookie
+      Accept: application/json
+    scan_interval: 60
+    timeout: 20
+    binary_sensor:
+      # Aan zolang Balans jouw EMS in het lopende kwartier een
+      # aFRR-importsessie heeft gegeven (afrrDiscovery.directions bevat
+      # 'import'). Overloop: in de eerste 5 min van een kwartier telt een
+      # sessie in het vorige kwartier ook, omdat Balans een nieuw kwartier
+      # pas na een paar minuten meldt.
+      - name: "BEVCC aFRR-importsessie"
+        unique_id: bevcc_afrr_importsessie
+        icon: mdi:transmission-tower-import
+        availability: >-
+          {{ value_json is defined and value_json is mapping and 'afrrDiscovery' in value_json }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set q = nu - nu % 900000 %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set disc = data.get('afrrDiscovery', []) %}
+          {% set cur = disc | selectattr('start', 'eq', q) | map(attribute='directions') | first | default([], true) %}
+          {% set prev = disc | selectattr('start', 'eq', q - 900000) | map(attribute='directions') | first | default([], true) %}
+          {{ 'import' in cur or ('import' in prev and nu - q < 300000) }}
+
+    sensor:
+      # De eigen all-in kwartierprijs van Balans: aFRR-importprijs tijdens een
+      # sessie (als Balans een bod had), anders de onbalans-afnameprijs.
+      # Balans werkt het lopende kwartier maar één keer bij (~3 min erin);
+      # alleen als laatste terugval en ter vergelijking.
+      - name: "BEVCC Balans kwartierprijs"
+        unique_id: bevcc_balans_kwartierprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:currency-eur
+        availability: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {{ data.get('prices', []) | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu)
+             | selectattr('values.onbalans_import', 'number') | list | count > 0 }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
+          {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
+          {% set ns = namespace(kaal=none) %}
+          {% for p in data.get('prices', []) if p.start <= nu < p.end %}
+            {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
+                          | map(attribute='directions') | first | default([], true) %}
+            {% set afrr = p['values']['afrr_import'] %}
+            {% set ns.kaal = afrr if 'import' in dirs and afrr is number else p['values']['onbalans_import'] %}
+          {% endfor %}
+          {{ (ns.kaal * 1.21 + leverkosten + eb) | round(5) if ns.kaal is number else none }}
+
+      # aFRR-importprijs van Balans voor het lopende kwartier (kaal, EUR/kWh).
+      # Terugval voor de sessieprijs als de TenneT-bron niet werkt.
+      - name: "BEVCC Balans aFRR-importprijs"
+        unique_id: bevcc_balans_afrr_importprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:currency-eur
+        availability: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {{ data.get('prices', []) | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu)
+             | selectattr('values.afrr_import', 'number') | list | count > 0 }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set ns = namespace(v=none) %}
+          {% for p in data.get('prices', []) if p.start <= nu < p.end %}
+            {% set ns.v = p['values']['afrr_import'] %}
+          {% endfor %}
+          {{ ns.v | round(5) if ns.v is number else none }}
+
+  # Nieuwste BEVCC-versie op GitHub (elke 6 uur), voor de update-melding.
+  - resource: https://api.github.com/repos/Freekers/BEVCC/releases/latest
+    headers:
+      Accept: application/vnd.github+json
+      User-Agent: BEVCC-Home-Assistant
+    scan_interval: 21600
+    timeout: 20
+    sensor:
+      - name: "BEVCC laatste versie"
+        unique_id: bevcc_laatste_versie
+        icon: mdi:github
+        availability: >-
+          {{ value_json is defined and value_json is mapping and 'tag_name' in value_json }}
+        value_template: "{{ value_json.tag_name | regex_replace('^v', '') }}"
+
+command_line:
+  # TenneT-onbalansprijzen per minuut (EUR/MWh), via services.tenergy.nl.
+  # Toestand = 'Afnemen'; attributen afnemen, invoeden en tijd (HH:MM).
+  - sensor:
+      name: "BEVCC TenneT onbalans"
+      unique_id: bevcc_tennet_onbalans
+      unit_of_measurement: "EUR/MWh"
+      icon: mdi:transmission-tower
+      scan_interval: 60
+      command_timeout: 30
+      command: |
+        curl -fsS --max-time 20 'https://services.tenergy.nl/public.aspx/actualimbalanceprices' | python3 -c "
+        import sys, re, html, json
+        h = sys.stdin.read()
+        m = re.search(r'(<table[^>]*>.*?Invoeden.*?Afnemen.*?</table>)', h, flags=re.S | re.I)
+        t = m.group(1) if m else h
+        clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(s))).strip()
+        num = r'-?\d[\d,\.]*'
+        norm = lambda n: float(n.replace('.', '').replace(',', '.'))
+        rows = re.findall(r'<tr[^>]*>.*?</tr>', t, flags=re.S | re.I)
+        data = [[clean(c) for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', r, flags=re.S | re.I)] for r in rows]
+        valid = [r for r in data if len(r) >= 9 and re.fullmatch(num, r[-1]) and re.fullmatch(num, r[-2]) and re.fullmatch(r'\d{1,2}:\d{2}', r[2])]
+        print(json.dumps({'afnemen': norm(valid[0][-1]), 'invoeden': norm(valid[0][-2]), 'tijd': valid[0][2]}) if valid else '{}')
+        "
+      availability: >-
+        {{ value_json is defined and value_json is mapping and value_json.get('afnemen') is number }}
+      value_template: "{{ value_json.afnemen }}"
+      json_attributes:
+        - afnemen
+        - invoeden
+        - tijd
+
+template:
+  # ---------------------------------------------------------------------------
+  # 2. EVCC-koppeling: de enige plek met EVCC-entiteiten. Opgebouwd uit
+  #    bevcc_evcc_prefix en bevcc_evcc_laadpunt (secrets.yaml).
+  #    EVCC-conventies: net + = afname, thuisaccu + = ontladen. kW wordt W.
+  # ---------------------------------------------------------------------------
+  - select:
+      # Doorgeefluik naar select.<prefix>_<laadpunt>_mode.
+      - name: "BEVCC EVCC-modus"
+        unique_id: bevcc_evcc_modus
+        icon: mdi:state-machine
+        availability: >-
+          {% set e = 'select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_mode' %}
+          {{ states(e) not in ['unavailable', 'unknown'] }}
+        state: >-
+          {{ states('select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_mode') }}
+        options: >-
+          {{ state_attr('select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_mode', 'options') or [] }}
+        select_option:
+          - action: select.select_option
+            target:
+              entity_id: "select.{{ states('input_text.bevcc_evcc_prefix') }}_{{ states('input_text.bevcc_evcc_laadpunt') }}_mode"
+            data:
+              option: "{{ option }}"
+
+  - binary_sensor:
+      - name: "BEVCC auto aangesloten"
+        unique_id: bevcc_auto_aangesloten
+        device_class: plug
+        availability: >-
+          {% set e = 'binary_sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_connected' %}
+          {{ states(e) in ['on', 'off'] }}
+        state: >-
+          {{ is_state('binary_sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_connected', 'on') }}
+
+      - name: "BEVCC auto laadt"
+        unique_id: bevcc_auto_laadt
+        device_class: battery_charging
+        availability: >-
+          {% set e = 'binary_sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_charging' %}
+          {{ states(e) in ['on', 'off'] }}
+        state: >-
+          {{ is_state('binary_sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_charging', 'on') }}
+
+  - sensor:
+      # + = afname van het net, - = teruglevering
+      - name: "BEVCC net vermogen"
+        unique_id: bevcc_net_vermogen
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        availability: "{{ is_number(states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_grid_power')) }}"
+        state: >-
+          {% set e = 'sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_grid_power' %}
+          {{ (states(e) | float * (1000 if state_attr(e, 'unit_of_measurement') == 'kW' else 1)) | round(0) }}
+
+      # + = thuisaccu ontlaadt, - = laadt
+      - name: "BEVCC thuisaccu vermogen"
+        unique_id: bevcc_thuisaccu_vermogen
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        availability: "{{ is_number(states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_power')) }}"
+        state: >-
+          {% set e = 'sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_power' %}
+          {{ (states(e) | float * (1000 if state_attr(e, 'unit_of_measurement') == 'kW' else 1)) | round(0) }}
+
+      # vermogen naar de auto, >= 0
+      - name: "BEVCC laadvermogen"
+        unique_id: bevcc_laadvermogen
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ is_number(states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_charge_power')) }}
+        state: >-
+          {% set e = 'sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_charge_power' %}
+          {{ (states(e) | float * (1000 if state_attr(e, 'unit_of_measurement') == 'kW' else 1)) | round(0) }}
+
+      - name: "BEVCC thuisaccu SoC"
+        unique_id: bevcc_thuisaccu_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        availability: "{{ is_number(states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_soc')) }}"
+        state: "{{ states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_soc') | float | round(1) }}"
+
+  # ---------------------------------------------------------------------------
+  # 3. Prijs voor de beslissingen: Balans-sessie + live TenneT-prijs
+  #    Tijdens een aFRR-importsessie: TenneT 'Invoeden' (afregelprijs), anders
+  #    de aFRR-prijs van Balans. Zonder sessie: TenneT 'Afnemen', anders de
+  #    kwartierprijs van Balans.
+  #    All-in = 1,21 x kaal + leverkosten + energiebelasting.
+  # ---------------------------------------------------------------------------
+  - sensor:
+      - name: "BEVCC afnameprijs"
+        unique_id: bevcc_afnameprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:cash-clock
+        availability: >-
+          {% set t = 'sensor.bevcc_tennet_onbalans' %}
+          {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+          {{ (has_value(t) and is_number(state_attr(t, 'afnemen')))
+             or (sessie and (has_value(t) and is_number(state_attr(t, 'invoeden'))
+                             or is_number(states('sensor.bevcc_balans_afrr_importprijs'))))
+             or is_number(states('sensor.bevcc_balans_kwartierprijs')) }}
+        state: >-
+          {% set t = 'sensor.bevcc_tennet_onbalans' %}
+          {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+          {% set invoeden = state_attr(t, 'invoeden') if has_value(t) else none %}
+          {% set afnemen = state_attr(t, 'afnemen') if has_value(t) else none %}
+          {% set afrr = states('sensor.bevcc_balans_afrr_importprijs') %}
+          {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
+          {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
+          {% if sessie and is_number(invoeden) %}{% set kaal = invoeden | float / 1000 %}
+          {% elif sessie and is_number(afrr) %}{% set kaal = afrr | float %}
+          {% elif is_number(afnemen) %}{% set kaal = afnemen | float / 1000 %}
+          {% else %}{% set kaal = none %}{% endif %}
+          {% if kaal is not none %}{{ (kaal * 1.21 + leverkosten + eb) | round(5) }}
+          {% else %}{{ states('sensor.bevcc_balans_kwartierprijs') | float(0) }}{% endif %}
+        attributes:
+          # kale prijs in EUR/kWh, bijvoorbeeld voor het live tariefslot van EVCC
+          kaal: >-
+            {% set t = 'sensor.bevcc_tennet_onbalans' %}
+            {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+            {% set invoeden = state_attr(t, 'invoeden') if has_value(t) else none %}
+            {% set afnemen = state_attr(t, 'afnemen') if has_value(t) else none %}
+            {% set afrr = states('sensor.bevcc_balans_afrr_importprijs') %}
+            {% if sessie and is_number(invoeden) %}{{ (invoeden | float / 1000) | round(5) }}
+            {% elif sessie and is_number(afrr) %}{{ afrr | float | round(5) }}
+            {% elif is_number(afnemen) %}{{ (afnemen | float / 1000) | round(5) }}
+            {% else %}{{ none }}{% endif %}
+
+      - name: "BEVCC prijsbron"
+        unique_id: bevcc_prijsbron
+        icon: mdi:source-branch
+        state: >-
+          {% set t = 'sensor.bevcc_tennet_onbalans' %}
+          {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+          {% if sessie and has_value(t) and is_number(state_attr(t, 'invoeden')) %}aFRR-import (afregelprijs)
+          {% elif sessie and is_number(states('sensor.bevcc_balans_afrr_importprijs')) %}aFRR-import (Balans)
+          {% elif has_value(t) and is_number(state_attr(t, 'afnemen')) %}onbalans (TenneT afnemen)
+          {% elif is_number(states('sensor.bevcc_balans_kwartierprijs')) %}Balans kwartierprijs
+          {% else %}onbekend{% endif %}
+
+  # ---------------------------------------------------------------------------
+  # 4. Voorwaarden
+  # ---------------------------------------------------------------------------
+  - binary_sensor:
+      # Direct aan boven 'Pauze boven'; uit na 2 min onder 'Pauze boven' - 0,02.
+      - name: "BEVCC prijspiek"
+        unique_id: bevcc_prijspiek
+        icon: mdi:flash-alert
+        availability: "{{ is_number(states('sensor.bevcc_afnameprijs')) }}"
+        delay_off: "00:02:00"
+        state: >-
+          {% set p = states('sensor.bevcc_afnameprijs') | float(0) %}
+          {% set cap = states('input_number.bevcc_pauze_boven') | float(0.35) %}
+          {{ p > cap or (p >= cap - 0.02 and this.state == 'on') }}
+
+      # EMS importeert nu: de thuisaccu laadt en de netafname zonder de auto
+      # ligt boven de minimale EMS-import. Pas na 90 s aan, zodat korte pulsen
+      # zonder aFRR-sessie van Balans genegeerd worden.
+      - name: "BEVCC EMS-import"
+        unique_id: bevcc_ems_import
+        icon: mdi:home-import-outline
+        delay_on: "00:01:30"
+        state: >-
+          {% set min_import = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
+          {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
+          {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
+          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
+          {{ accu < -500 and net - auto > min_import }}
+
+      # Start: thuisaccu op of boven de ondergrens, het EMS importeert nu, de
+      # all-in prijs ligt onder 'Boost onder', en
+      #   - Balans meldt een aFRR-importsessie (direct - de sessie bewijst dat
+      #     de import echt is), of
+      #   - alleen bij 'Boost bij' = 'aFRR + onbalans': de import duurt al 90 s.
+      # Doorgaan zolang:
+      #   - de prijs onder 'Boost onder' + 0,02 blijft, en
+      #   - het net nog meer dan 1 kW levert. Waar zolang het EMS importeert
+      #     (met elk vermogen) of de accu stil houdt; onwaar zodra de accu huis
+      #     en auto alleen dekt (eigen verbruik houdt het net rond 0), en
+      #   - de thuisaccu boven de ondergrens - 2 % blijft (onbekend -> stop), en
+      #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt.
+      # 2 min uitstelvertraging tegen korte dips, 10 min rust na een boost.
+      # Prijs onbekend -> geen boost. 'Boost onder' op -0,50 (minimum) -> nooit,
+      # ook niet bij een nog lagere prijs.
+      - name: "BEVCC goedkope import"
+        unique_id: bevcc_goedkope_import
+        icon: mdi:transmission-tower-import
+        delay_off: "00:02:00"
+        state: >-
+          {% set prijs = states('sensor.bevcc_afnameprijs') | float(99) %}
+          {% set grens = states('input_number.bevcc_boost_onder') | float(0.20) %}
+          {% set min_import = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
+          {% set ondergrens = states('input_number.bevcc_accu_ondergrens') | float(0) %}
+          {% set soc = states('sensor.bevcc_thuisaccu_soc') | float(0) %}
+          {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
+          {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
+          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
+          {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+          {% set ook_onbalans = is_state('input_select.bevcc_boost_bij', 'aFRR + onbalans') %}
+          {% if this.state == 'on' %}
+            {{ prijs < grens + 0.02 and net > 1000 and soc >= ondergrens - 2
+               and (sessie or ook_onbalans) }}
+          {% else %}
+            {{ grens > -0.5 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
+               and (sessie or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
+               and now() - this.last_changed > timedelta(minutes=10) }}
+          {% endif %}
+
+  # ---------------------------------------------------------------------------
+  # 5. Besluit: waar de EVCC-modus nu naartoe moet (geen / pauze / boost)
+  # ---------------------------------------------------------------------------
+  - sensor:
+      # Pauze alleen terwijl de auto echt laadt. Prijs weggevallen: een
+      # lopende pauze blijft 15 min staan en valt dan open (EVCC neemt over).
+      - name: "BEVCC doel"
+        unique_id: bevcc_doel
+        icon: mdi:target
+        state: >-
+          {% set status = states('input_select.bevcc_status') %}
+          {% set s = states.binary_sensor.bevcc_prijspiek %}
+          {% set piek = s is not none and (s.state == 'on'
+               or (s.state in ['unavailable', 'unknown'] and status == 'pauze'
+                   and now() - s.last_changed < timedelta(minutes=15))) %}
+          {% if not is_state('input_boolean.bevcc_standaardwaarden', 'on') %}geen
+          {% elif not is_state('binary_sensor.bevcc_auto_aangesloten', 'on') %}geen
+          {% elif piek and (is_state('binary_sensor.bevcc_auto_laadt', 'on') or status == 'pauze') %}pauze
+          {% elif is_state('binary_sensor.bevcc_goedkope_import', 'on') %}boost
+          {% else %}geen{% endif %}
+
+      - name: "BEVCC versie"
+        unique_id: bevcc_versie
+        icon: mdi:tag
+        state: "1.0.0"
+
+  - binary_sensor:
+      - name: "BEVCC update beschikbaar"
+        unique_id: bevcc_update_beschikbaar
+        device_class: update
+        # Versies vergeleken als getallen (1.10.0 > 1.9.0); '-beta' e.d. genegeerd.
+        state: >-
+          {% set nieuw = states('sensor.bevcc_laatste_versie') %}
+          {% set huidig = states('sensor.bevcc_versie') %}
+          {% if nieuw in ['unknown', 'unavailable', ''] %}false
+          {% else %}
+            {{ nieuw.split('-')[0].split('.') | map('int', 0) | list
+               > huidig.split('-')[0].split('.') | map('int', 0) | list }}
+          {% endif %}
+
+# -----------------------------------------------------------------------------
+# 6. Automatiseringen
+# -----------------------------------------------------------------------------
+automation:
+  # Zet het doel om in de EVCC-modus
+  - id: bevcc_prijssturing
+    alias: "BEVCC prijssturing"
+    description: >-
+      Zet de EVCC-modus op Uit bij een prijspiek, op Snel bij goedkope
+      EMS-import, en daarna terug naar de modus die er stond.
+    mode: queued
+    max: 10
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        id: doel
+        entity_id: sensor.bevcc_doel
+      # Modus veranderd en 30 s stabiel: overname door de gebruiker of herstart
+      - trigger: state
+        id: modus
+        entity_id: select.bevcc_evcc_modus
+        for: "00:00:30"
+      # 1 min na pauze/boost: controleren of EVCC meeging
+      - trigger: state
+        id: controle
+        entity_id: input_select.bevcc_status
+        to: ["pauze", "boost"]
+        for: "00:01:00"
+      # Vangnet voor gemiste triggers
+      - trigger: time_pattern
+        id: tik
+        minutes: "/5"
+      - trigger: homeassistant
+        id: start
+        event: start
+
+    actions:
+      # Toestand lezen bij de start van de run (runs kunnen in de wachtrij staan)
+      - variables:
+          doel: "{{ states('sensor.bevcc_doel') }}"
+          status: "{{ states('input_select.bevcc_status') }}"
+          modus: "{{ states('select.bevcc_evcc_modus') }}"
+          # De API-waarde van EVCC's modus Snel is 'now' ('Snel'/'Fast' is
+          # alleen het label). Alleen 'fast' als de select dat echt aanbiedt.
+          snel: >-
+            {% set o = state_attr('select.bevcc_evcc_modus', 'options') or [] %}
+            {{ 'fast' if 'fast' in o and 'now' not in o else 'now' }}
+          bewaard: >-
+            {% set m = states('input_text.bevcc_te_herstellen_modus') %}
+            {{ m if m in ['smart', snel] else 'smart' }}
+          verwacht: "{{ {'pauze': 'off', 'boost': snel}.get(status, '') }}"
+          modus_na_status: >-
+            {% set m = states.select.bevcc_evcc_modus %}
+            {{ m is not none and m.last_changed > states.input_select.bevcc_status.last_changed }}
+          info: >-
+            prijs € {{ states('sensor.bevcc_afnameprijs') }}/kWh ({{ states('sensor.bevcc_prijsbron') }}),
+            net {{ states('sensor.bevcc_net_vermogen') }} W,
+            thuisaccu {{ states('sensor.bevcc_thuisaccu_vermogen') }} W / {{ states('sensor.bevcc_thuisaccu_soc') }} %
+
+      - choose:
+          # A) Onze modus is niet bij EVCC aangekomen
+          - conditions:
+              - condition: trigger
+                id: controle
+              - "{{ status in ['pauze', 'boost'] and modus != verwacht and not modus_na_status }}"
+            sequence:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: rust
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "Modus '{{ verwacht }}' is NIET overgenomen, staat nog op '{{ modus }}'. Nieuwe poging binnen 5 min."
+                  entity_id: select.bevcc_evcc_modus
+              - action: persistent_notification.create
+                data:
+                  notification_id: bevcc_modus_mislukt
+                  title: BEVCC
+                  message: >-
+                    De EVCC-modus staat na 1 minuut nog op '{{ modus }}' in plaats van
+                    '{{ verwacht }}'. Controleer de EVCC-integratie.
+
+          # B1) Modus kwam terug uit 'unavailable' anders dan de onze
+          #     (herladen integratie / herstart EVCC) -> opnieuw instellen
+          - conditions:
+              - condition: trigger
+                id: modus
+              - "{{ status in ['pauze', 'boost'] and modus in ['off', 'smart', snel] and modus != verwacht
+                    and trigger.from_state.state in ['unavailable', 'unknown'] }}"
+            sequence:
+              - action: select.select_option
+                target:
+                  entity_id: select.bevcc_evcc_modus
+                data:
+                  option: "{{ verwacht }}"
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "EVCC kwam terug op '{{ modus }}' tijdens {{ status }}; opnieuw '{{ verwacht }}' ingesteld"
+                  entity_id: select.bevcc_evcc_modus
+
+          # B2) Modus door iemand anders gewijzigd tijdens pauze/boost -> opzij
+          - conditions:
+              - condition: trigger
+                id: modus
+              - "{{ status in ['pauze', 'boost'] and modus in ['off', 'smart', snel] and modus != verwacht
+                    and modus_na_status }}"
+            sequence:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: handmatig
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "Modus handmatig op '{{ modus }}' gezet tijdens {{ status }}; BEVCC wacht tot {{ doel }} voorbij is"
+                  entity_id: select.bevcc_evcc_modus
+
+          # C) Handmatige overname eindigt samen met de situatie die erbij hoorde
+          - conditions:
+              - "{{ status == 'handmatig' and doel == 'geen' }}"
+            sequence:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: rust
+
+          # D) Pauze (vanuit Smart, Snel of een lopende boost)
+          - conditions:
+              - "{{ doel == 'pauze'
+                    and ((status == 'rust' and modus in ['smart', snel]) or status == 'boost') }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ status == 'rust' }}"
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.bevcc_te_herstellen_modus
+                    data:
+                      value: "{{ modus }}"
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: pauze
+              - action: select.select_option
+                target:
+                  entity_id: select.bevcc_evcc_modus
+                data:
+                  option: "off"
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "Gepauzeerd (prijspiek): {{ info }}; daarna terug naar '{{ modus if status == 'rust' else bewaard }}'"
+                  entity_id: select.bevcc_evcc_modus
+
+          # E) Boost (alleen vanuit Smart)
+          - conditions:
+              - "{{ doel == 'boost'
+                    and ((status == 'rust' and modus == 'smart') or (status == 'pauze' and bewaard == 'smart')) }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ status == 'rust' }}"
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.bevcc_te_herstellen_modus
+                    data:
+                      value: smart
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: boost
+              - action: select.select_option
+                target:
+                  entity_id: select.bevcc_evcc_modus
+                data:
+                  option: "{{ snel }}"
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "Boost (goedkope EMS-import): {{ info }}; daarna terug naar 'smart'"
+                  entity_id: select.bevcc_evcc_modus
+
+          # F) Vrijgeven: situatie voorbij (of een boost tijdens een pauze vanuit Snel)
+          - conditions:
+              - "{{ status in ['pauze', 'boost']
+                    and (doel == 'geen' or (doel == 'boost' and status == 'pauze')) }}"
+            sequence:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.bevcc_status
+                data:
+                  option: rust
+              # Alleen terugzetten als de modus nog de onze is (of EVCC even
+              # weg is). Gecontroleerd: tot 1 min wachten tot de modus wijzigt,
+              # max. 3 pogingen, dan een melding. Kiest de gebruiker intussen
+              # zelf een modus, dan blijft die staan.
+              # In het slechtste geval (EVCC onbereikbaar) duurt dit 3 min;
+              # andere triggers wachten in de rij.
+              - if:
+                  - condition: template
+                    value_template: "{{ modus in [verwacht, 'unavailable', 'unknown'] }}"
+                then:
+                  - repeat:
+                      sequence:
+                        - action: select.select_option
+                          continue_on_error: true
+                          target:
+                            entity_id: select.bevcc_evcc_modus
+                          data:
+                            option: "{{ bewaard }}"
+                        - wait_template: >-
+                            {{ states('select.bevcc_evcc_modus') not in [verwacht, 'unavailable', 'unknown'] }}
+                          timeout: "00:01:00"
+                      until:
+                        - "{{ wait.completed or repeat.index >= 3 }}"
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{ states('select.bevcc_evcc_modus') in [verwacht, 'unavailable', 'unknown'] }}
+                    then:
+                      - action: persistent_notification.create
+                        data:
+                          notification_id: bevcc_herstel_mislukt
+                          title: BEVCC
+                          message: >-
+                            3 keer geprobeerd de EVCC-modus terug te zetten naar '{{ bewaard }}',
+                            maar hij staat nog op '{{ states('select.bevcc_evcc_modus') }}'.
+                            Zet de modus zelf in EVCC en controleer de EVCC-integratie.
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: "Vrijgegeven ({{ status }} -> {{ doel }}): {{ info }}; modus nu '{{ states('select.bevcc_evcc_modus') }}' (doel '{{ bewaard }}')"
+                  entity_id: select.bevcc_evcc_modus
+
+  # Standaardwaarden: eenmalig na installatie, of opnieuw door
+  # 'BEVCC standaardwaarden ingesteld' uit te zetten.
+  - id: bevcc_standaardwaarden
+    alias: "BEVCC standaardwaarden"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+      # ook na 'Automatiseringen herladen' (installatie zonder herstart)
+      - trigger: event
+        event_type: automation_reloaded
+      - trigger: state
+        entity_id: input_boolean.bevcc_standaardwaarden
+        to: "off"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.bevcc_standaardwaarden
+        state: "off"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_pauze_boven
+        data:
+          value: 0.35
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_boost_onder
+        data:
+          value: 0.20
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_boost_min_import
+        data:
+          value: 2
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_accu_ondergrens
+        data:
+          value: 50
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_energiebelasting
+        data:
+          value: 0.11085
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_leverkosten
+        data:
+          value: 0.02
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.bevcc_boost_bij
+        data:
+          option: alleen aFRR
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.bevcc_standaardwaarden
+      - action: logbook.log
+        data:
+          name: BEVCC
+          message: "Standaardwaarden ingesteld"
+          entity_id: input_boolean.bevcc_standaardwaarden
+
+  # Balans-API onbereikbaar (meestal een verlopen sessiecookie)
+  - id: bevcc_balans_api_bewaking
+    alias: "BEVCC Balans-API bewaking"
+    mode: restart
+    triggers:
+      - trigger: state
+        id: weg
+        entity_id: binary_sensor.bevcc_afrr_importsessie
+        to: "unavailable"
+        for: "00:10:00"
+      # al onbereikbaar bij het opstarten (bijvoorbeeld een verlopen cookie)
+      - trigger: homeassistant
+        id: start
+        event: start
+      - trigger: state
+        id: terug
+        entity_id: binary_sensor.bevcc_afrr_importsessie
+        from: "unavailable"
+    actions:
+      - if:
+          - condition: trigger
+            id: terug
+        then:
+          - action: persistent_notification.dismiss
+            data:
+              notification_id: bevcc_balans_api
+        else:
+          - if:
+              - condition: trigger
+                id: start
+            then:
+              - delay: "00:10:00"
+          - condition: state
+            entity_id: binary_sensor.bevcc_afrr_importsessie
+            state: "unavailable"
+          - action: persistent_notification.create
+            data:
+              notification_id: bevcc_balans_api
+              title: BEVCC - Balans-API niet bereikbaar
+              message: >-
+                De Balans-API geeft al 10 minuten geen gegevens. BEVCC ziet nu geen
+                aFRR-importsessies en rekent met de TenneT-afnameprijs (te hoog tijdens
+                een sessie), en boost alleen nog bij 'Boost bij' = 'aFRR + onbalans'.
+                Waarschijnlijk is de sessiecookie verlopen: log opnieuw in op
+                dashboard.balansenergie.nl, zet de nieuwe Cookie-header in
+                bevcc_balans_cookie in secrets.yaml en herlaad 'RESTful'
+                (Ontwikkelhulpmiddelen → YAML).
+
+  # Nieuwe BEVCC-versie beschikbaar
+  - id: bevcc_update_melding
+    alias: "BEVCC update-melding"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.bevcc_update_beschikbaar
+        to: "on"
+      # meldingen overleven geen herstart
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.bevcc_update_beschikbaar
+        state: "on"
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: bevcc_update
+          title: BEVCC-update beschikbaar
+          message: >-
+            BEVCC {{ states('sensor.bevcc_laatste_versie') }} is beschikbaar
+            (geïnstalleerd: {{ states('sensor.bevcc_versie') }}). Lees de wijzigingen op
+            https://github.com/Freekers/BEVCC/releases en vervang daarna
+            packages/bevcc.yaml (en eventueel de dashboardkaart).

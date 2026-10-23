@@ -1,0 +1,16 @@
+name: Idee of verbetering
+description: Een voorstel om BEVCC beter te maken.
+labels: ["idee"]
+body:
+  - type: textarea
+    id: idee
+    attributes:
+      label: Wat zou je willen?
+    validations:
+      required: true
+  - type: textarea
+    id: waarom
+    attributes:
+      label: Waarom? Welke situatie lost het op?
+    validations:
+      required: true

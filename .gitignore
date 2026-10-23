@@ -1,0 +1,22 @@
+# Nooit publiceren: cookie en andere geheimen
+secrets.yaml
+**/secrets.yaml
+
+# Eigen API-dumps (kunnen accountgegevens bevatten)
+*dashboard.balansenergie.nl*.json
+dumps/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Home Assistant-configuratiecontrole (CI)
+ci-config/
+
+# Editors en OS
+.vscode/
+.idea/
+.DS_Store

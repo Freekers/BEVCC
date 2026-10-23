@@ -1,0 +1,59 @@
+name: Probleem melden
+description: BEVCC doet iets anders dan je verwacht.
+labels: ["probleem"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Dank voor je melding. **Plak nooit je Balans-cookie, je secrets.yaml of ruwe
+        API-antwoorden met accountgegevens.** BEVCC is een fanproject en niet van
+        Balans Energie: met vragen over je contract of factuur kun je hier niet terecht.
+  - type: textarea
+    id: wat
+    attributes:
+      label: Wat gebeurde er?
+      description: Wat deed BEVCC (of juist niet), en wanneer ongeveer?
+    validations:
+      required: true
+  - type: textarea
+    id: verwacht
+    attributes:
+      label: Wat had je verwacht?
+    validations:
+      required: true
+  - type: textarea
+    id: toestand
+    attributes:
+      label: Toestand op dat moment
+      description: >-
+        Waarden van sensor.bevcc_doel, input_select.bevcc_status, sensor.bevcc_afnameprijs,
+        sensor.bevcc_prijsbron, binary_sensor.bevcc_afrr_importsessie, de EVCC-modus en het
+        logboek van de dashboardkaart. Een trace van 'BEVCC prijssturing' helpt ook
+        (Instellingen → Automatiseringen → BEVCC prijssturing → Traces → downloaden).
+      render: text
+  - type: input
+    id: bevcc
+    attributes:
+      label: BEVCC-versie
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant-versie
+      placeholder: "2026.10.2"
+    validations:
+      required: true
+  - type: input
+    id: evcc
+    attributes:
+      label: EVCC- en ha-evcc-versie
+      placeholder: "EVCC x.y.z, ha-evcc x.y.z"
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: Ik heb geen cookie, secrets of persoonlijke gegevens in deze melding gezet.
+          required: true

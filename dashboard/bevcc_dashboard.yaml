@@ -1,0 +1,258 @@
+# BEVCC - dashboardkaart
+# Dashboard bewerken -> Kaart toevoegen -> Handmatig -> alles hieronder plakken.
+# Werkt alleen samen met packages/bevcc.yaml.
+type: vertical-stack
+cards:
+  # --- Kop: prijs, status, drempels ---
+  - type: markdown
+    content: |
+      {% set p = states('sensor.bevcc_afnameprijs') %}
+      {% set kaal = state_attr('sensor.bevcc_afnameprijs', 'kaal') %}
+      {% set balans = states('sensor.bevcc_balans_kwartierprijs') %}
+      {% set cap = states('input_number.bevcc_pauze_boven') | float(0.35) %}
+      {% set boost = states('input_number.bevcc_boost_onder') | float(0.20) %}
+      {% set vast = states('input_number.bevcc_energiebelasting') | float(0.11085) + states('input_number.bevcc_leverkosten') | float(0.02) %}
+      {% set vloer = states('input_number.bevcc_accu_ondergrens') | int(0) %}
+      {% set min_import = states('input_number.bevcc_boost_min_import') | replace('.', ',') %}
+      {% set alleen_afrr = not is_state('input_select.bevcc_boost_bij', 'aFRR + onbalans') %}
+      ## {{ ('€ %.3f' | format(p | float) | replace('.', ',')) if is_number(p) else 'prijs onbekend' }} /kWh · {{ states('input_select.bevcc_status') }}
+      Bron: **{{ states('sensor.bevcc_prijsbron') }}**{% if is_number(kaal) %} (kaal € {{ '%.3f' | format(kaal | float) | replace('.', ',') }}){% endif %}
+      {% if is_number(balans) %} · Balans kwartierprijs € {{ '%.3f' | format(balans | float) | replace('.', ',') }}{% endif %}
+
+      Pauze boven **€ {{ '%.2f' | format(cap) | replace('.', ',') }}** (≈ {{ ((cap - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal), alleen terwijl de auto laadt ·
+      {% if boost <= -0.5 %}boost staat **uit** (Boost onder op het minimum).
+      {% else %}boost naar Snel onder **€ {{ '%.2f' | format(boost) | replace('.', ',') }}** (≈ {{ ((boost - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal)
+      {% if alleen_afrr %}tijdens een aFRR-importsessie van ≥ {{ min_import }} kW{% else %}als het EMS ≥ {{ min_import }} kW importeert (direct bij een aFRR-sessie, anders na 90 s){% endif %}
+      en de thuisaccu ≥ {{ vloer }} % is.
+      Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if alleen_afrr %} als de aFRR-sessie eindigt,{% endif %} als het net onder 1 kW zakt
+      of als de thuisaccu onder {{ vloer - 2 }} % komt.{% endif %}
+
+  # --- Meldingen ---
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: select.bevcc_evcc_modus
+        state: unavailable
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="error">EVCC-laadpunt niet gevonden: <b>select.{{ states('input_text.bevcc_evcc_prefix') }}_{{ states('input_text.bevcc_evcc_laadpunt') }}_mode</b> bestaat niet of is onbereikbaar. Controleer <code>bevcc_evcc_prefix</code> en <code>bevcc_evcc_laadpunt</code> in secrets.yaml.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.bevcc_status
+        state: pauze
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="warning">Laden gepauzeerd door een prijspiek. Daarna terug naar <b>{{ states('input_text.bevcc_te_herstellen_modus') }}</b>.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.bevcc_status
+        state: boost
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="success">Boost: goedkope EMS-import, laden op vol vermogen. Daarna terug naar <b>smart</b>.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_select.bevcc_status
+        state: handmatig
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="info">Modus handmatig gewijzigd: BEVCC wacht tot de huidige pauze of boost voorbij is.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: binary_sensor.bevcc_afrr_importsessie
+        state: unavailable
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="error">Balans-API niet bereikbaar: aFRR-importsessies worden niet herkend. Is de sessiecookie verlopen?</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: sensor.bevcc_tennet_onbalans
+        state: unavailable
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="warning">Live TenneT-prijs niet beschikbaar: BEVCC rekent met de kwartierprijs van Balans (loopt een paar minuten achter).</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: sensor.bevcc_afnameprijs
+        state: unavailable
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="error">Geen afnameprijs beschikbaar (TenneT en Balans): BEVCC staat stil.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: automation.bevcc_prijssturing
+        state: "off"
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="error">De automatisering <b>BEVCC prijssturing</b> staat uit.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: binary_sensor.bevcc_update_beschikbaar
+        state: "on"
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="info">BEVCC {{ states('sensor.bevcc_laatste_versie') }} is beschikbaar (geïnstalleerd: {{ states('sensor.bevcc_versie') }}).</ha-alert>
+
+  # --- Toestand ---
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: automation.bevcc_prijssturing
+        name: Prijssturing
+        color: green
+      - type: tile
+        entity: binary_sensor.bevcc_prijspiek
+        name: Prijspiek
+        color: red
+      - type: tile
+        entity: sensor.bevcc_laadvermogen
+        name: Auto
+      - type: tile
+        entity: sensor.bevcc_thuisaccu_soc
+        name: Thuisaccu
+      - type: tile
+        entity: sensor.bevcc_thuisaccu_vermogen
+        name: Thuisaccu (+ = ontladen)
+      - type: tile
+        entity: sensor.bevcc_net_vermogen
+        name: Net (+ = afname)
+
+  # --- Instellingen ---
+  - type: tile
+    entity: select.bevcc_evcc_modus
+    name: EVCC-modus
+    features:
+      - type: select-options
+  - type: tile
+    entity: input_select.bevcc_boost_bij
+    name: Boost bij
+    features:
+      - type: select-options
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: input_number.bevcc_pauze_boven
+        name: Pauze boven
+        features:
+          - type: numeric-input
+            style: buttons
+      - type: tile
+        entity: input_number.bevcc_boost_onder
+        name: Boost onder
+        features:
+          - type: numeric-input
+            style: buttons
+      - type: tile
+        entity: input_number.bevcc_boost_min_import
+        name: Boost min. EMS-import
+        features:
+          - type: numeric-input
+            style: buttons
+      - type: tile
+        entity: input_number.bevcc_accu_ondergrens
+        name: Accu-ondergrens (boost)
+        features:
+          - type: numeric-input
+            style: buttons
+
+  # --- Geschiedenis ---
+  - type: history-graph
+    title: Prijs en drempels (12 u)
+    hours_to_show: 12
+    entities:
+      - entity: sensor.bevcc_afnameprijs
+        name: Afnameprijs all-in (live)
+      - entity: sensor.bevcc_balans_kwartierprijs
+        name: Balans kwartierprijs
+      - entity: input_number.bevcc_pauze_boven
+        name: Pauze boven
+      - entity: input_number.bevcc_boost_onder
+        name: Boost onder
+  - type: history-graph
+    title: Vermogen (12 u)
+    hours_to_show: 12
+    entities:
+      - entity: sensor.bevcc_net_vermogen
+        name: Net
+      - entity: sensor.bevcc_thuisaccu_vermogen
+        name: Thuisaccu
+      - entity: sensor.bevcc_laadvermogen
+        name: Auto
+  - type: history-graph
+    title: Status (12 u)
+    hours_to_show: 12
+    entities:
+      - entity: input_select.bevcc_status
+        name: Status
+      - entity: select.bevcc_evcc_modus
+        name: EVCC-modus
+      - entity: sensor.bevcc_prijsbron
+        name: Prijsbron
+      - entity: binary_sensor.bevcc_prijspiek
+        name: Prijspiek
+      - entity: binary_sensor.bevcc_goedkope_import
+        name: Goedkope import
+      - entity: binary_sensor.bevcc_auto_laadt
+        name: Laden
+
+  # --- Logboek pauze / boost / vrijgave ---
+  - type: logbook
+    title: Gebeurtenissen BEVCC
+    hours_to_show: 48
+    target:
+      entity_id:
+        - select.bevcc_evcc_modus
+
+  # --- Details en tarieven ---
+  - type: entities
+    title: Details
+    entities:
+      - entity: sensor.bevcc_doel
+        name: Doel op dit moment
+      - entity: input_select.bevcc_status
+        name: Status (beheerd door BEVCC)
+      - entity: input_text.bevcc_te_herstellen_modus
+        name: Te herstellen modus
+      - entity: binary_sensor.bevcc_auto_aangesloten
+        name: Auto aangesloten
+      - entity: binary_sensor.bevcc_afrr_importsessie
+        name: aFRR-importsessie (Balans)
+      - entity: sensor.bevcc_balans_afrr_importprijs
+        name: Balans aFRR-importprijs (kaal)
+      - entity: sensor.bevcc_tennet_onbalans
+        name: TenneT afnemen (kaal, €/MWh)
+      - type: section
+        label: Tarieven (jaarlijks controleren)
+      - entity: input_number.bevcc_energiebelasting
+        name: Energiebelasting incl. btw
+      - entity: input_number.bevcc_leverkosten
+        name: Leverkosten incl. btw
+      - entity: input_boolean.bevcc_standaardwaarden
+        name: Standaardwaarden ingesteld (uit = herstellen)
+      - type: section
+        label: Versie
+      - entity: sensor.bevcc_versie
+        name: Geïnstalleerd
+      - entity: sensor.bevcc_laatste_versie
+        name: Nieuwste op GitHub

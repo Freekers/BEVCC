@@ -1,0 +1,126 @@
+{
+  "_toelichting": "Synthetische testdata in de vorm van /customer/current-prices/api/ van Balans Energie. Kwartieren vanaf 2026-10-17 10:00 UTC: Q0 geen sessie (wel een aFRR-bod), Q1 aFRR-importsessie, Q2 geen sessie (overloop uit Q1), Q3 aFRR-exportsessie met prijspiek, Q4 (11:00) nog niet gemeld.",
+  "prices": [
+    {
+      "start": 1792231200000,
+      "end": 1792232100000,
+      "provisional": false,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 0.18,
+        "onbalans_export": 0.12,
+        "afrr_import": 0.15,
+        "afrr_export": 0.25
+      },
+      "afrrBidStatus": {
+        "import": "confirmed",
+        "export": "confirmed"
+      }
+    },
+    {
+      "start": 1792232100000,
+      "end": 1792233000000,
+      "provisional": false,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 0.21,
+        "onbalans_export": 0.0337,
+        "afrr_import": 0.0337,
+        "afrr_export": 0.25
+      },
+      "afrrBidStatus": {
+        "import": "confirmed",
+        "export": "confirmed"
+      }
+    },
+    {
+      "start": 1792233000000,
+      "end": 1792233900000,
+      "provisional": false,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 0.19,
+        "onbalans_export": 0.14,
+        "afrr_import": 0.15,
+        "afrr_export": 0.25
+      },
+      "afrrBidStatus": {
+        "import": "confirmed",
+        "export": "confirmed"
+      }
+    },
+    {
+      "start": 1792233900000,
+      "end": 1792234800000,
+      "provisional": true,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 4.17,
+        "onbalans_export": 4.17,
+        "afrr_import": null,
+        "afrr_export": 4.17
+      },
+      "afrrBidStatus": {
+        "import": "none",
+        "export": "confirmed"
+      }
+    }
+  ],
+  "commands": [],
+  "commandsAvailable": true,
+  "afrrEventIsps": [
+    1792232100000,
+    1792233900000
+  ],
+  "afrrDiscovery": [
+    {
+      "start": 1792231200000,
+      "directions": [],
+      "observedUntil": 1792232100000,
+      "complete": true,
+      "controlDirections": []
+    },
+    {
+      "start": 1792232100000,
+      "directions": [
+        "import"
+      ],
+      "observedUntil": 1792233000000,
+      "complete": true,
+      "controlDirections": [
+        "import"
+      ]
+    },
+    {
+      "start": 1792233000000,
+      "directions": [],
+      "observedUntil": 1792233900000,
+      "complete": true,
+      "controlDirections": []
+    },
+    {
+      "start": 1792233900000,
+      "directions": [
+        "export"
+      ],
+      "observedUntil": 1792234800000,
+      "complete": false,
+      "controlDirections": [
+        "export"
+      ]
+    }
+  ],
+  "afrrAvailable": true,
+  "historyBackfilled": true,
+  "windows": [
+    [
+      1792144800000,
+      1792234800000
+    ]
+  ],
+  "generatedAt": 1792234860000
+}

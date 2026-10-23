@@ -1,0 +1,45 @@
+name: Controle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: yamllint en tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Afhankelijkheden installeren
+        run: pip install -r requirements-dev.txt
+      - name: yamllint
+        run: yamllint --strict .
+      - name: Tests
+        run: pytest -v
+
+  home-assistant:
+    name: Configuratiecontrole Home Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Home Assistant installeren
+        run: pip install homeassistant jsonpath xmltodict
+      - name: Testconfiguratie maken
+        run: |
+          mkdir -p ci-config/packages
+          cp packages/bevcc.yaml ci-config/packages/
+          cp secrets.example.yaml ci-config/secrets.yaml
+          printf 'homeassistant:\n  packages: !include_dir_named packages\n' > ci-config/configuration.yaml
+      - name: Configuratie controleren
+        run: hass --script check_config --config ci-config
