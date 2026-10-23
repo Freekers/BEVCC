@@ -25,21 +25,27 @@ jobs:
       - name: Tests
         run: pytest -v
 
+  # In de officiële Home Assistant-container (stable): dezelfde omgeving als bij
+  # gebruikers, met alle afhankelijkheden al geïnstalleerd. Buiten een container
+  # of virtualenv installeert check_config zijn eigen afhankelijkheden in een
+  # aparte map en kan ze daarna niet laden.
   home-assistant:
     name: Configuratiecontrole Home Assistant
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-      - name: Home Assistant installeren
-        run: pip install homeassistant jsonpath xmltodict
       - name: Testconfiguratie maken
         run: |
           mkdir -p ci-config/packages
           cp packages/bevcc.yaml ci-config/packages/
           cp secrets.example.yaml ci-config/secrets.yaml
           printf 'homeassistant:\n  packages: !include_dir_named packages\n' > ci-config/configuration.yaml
+      - name: Home Assistant-container ophalen
+        run: docker pull ghcr.io/home-assistant/home-assistant:stable
       - name: Configuratie controleren
-        run: hass --script check_config --config ci-config
+        run: >-
+          docker run --rm
+          --volume "$PWD/ci-config:/config"
+          --entrypoint python3
+          ghcr.io/home-assistant/home-assistant:stable
+          -m homeassistant --script check_config --config /config

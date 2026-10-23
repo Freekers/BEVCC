@@ -199,8 +199,7 @@ Je instellingen blijven staan: ze zitten in Home Assistant, niet in het bestand.
 HACS kan integraties, dashboardkaarten, thema's, AppDaemon- en Python-scripts en
 templates installeren, maar geen YAML-packages. BEVCC als package houdt alles leesbaar en
 aanpasbaar in gewone Home Assistant-YAML, zonder Python-code die bij elke Home
-Assistant-versie moet meegroeien. Een eigen integratie (en dus HACS) kan later, als daar
-behoefte aan is.
+Assistant-versie moet meegroeien.
 
 ## Ontwerpkeuzes
 
