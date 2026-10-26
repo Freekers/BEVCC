@@ -531,7 +531,7 @@ template:
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.0.0"
+        state: "1.2.1"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"
