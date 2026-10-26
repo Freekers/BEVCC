@@ -115,7 +115,8 @@ def test_ems_import():
     (dict(IMPORT, ems="on"), "off", 60, True),                       # geen sessie, import >= 90 s
     (dict(net=400, accu=300, kaal=52.8, sessie="on"), "off", 60, False),  # sessie, maar geen import
     (dict(net=12500, accu=-11300, kaal=65, sessie="on"), "off", 60, False),  # prijs 0,21
-    (dict(IMPORT, sessie="on"), "off", 5, False),                    # 10 min rust na een boost
+    (dict(IMPORT, sessie="on"), "off", 4, False),                    # 5 min rust na een boost
+    (dict(IMPORT, sessie="on"), "off", 6, True),                     # rust voorbij
     (dict(IMPORT, sessie="on", ems="on", grens=-0.5), "off", 60, False),  # boost uit
     (dict(net=12500, accu=-11300, kaal=-1000, sessie="on", grens=-0.5), "off", 60, False),  # uit = uit
     (dict(net=12500, accu=-11300, kaal=-1000, sessie="on"), "off", 60, True),  # negatieve prijs

@@ -478,7 +478,9 @@ template:
       #     de auto en is de goedkope import (grotendeels) voorbij, en
       #   - de thuisaccu boven de ondergrens - 2 % blijft (onbekend -> stop), en
       #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt.
-      # 2 min uitstelvertraging tegen korte dips, 10 min rust na een boost.
+      # 2 min uitstelvertraging tegen korte dips, 5 min rust na een boost (de boost
+      # verandert zelf de vermogens die hier gemeten worden; zonder rust kan hij
+      # blijven aan- en uitgaan).
       # Prijs onbekend -> geen boost. 'Boost onder' op -0,50 (minimum) -> nooit,
       # ook niet bij een nog lagere prijs.
       - name: "BEVCC goedkope import"
@@ -502,7 +504,7 @@ template:
           {% else %}
             {{ grens > -0.5 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
                and (sessie or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
-               and now() - this.last_changed > timedelta(minutes=10) }}
+               and now() - this.last_changed > timedelta(minutes=5) }}
           {% endif %}
 
   # ---------------------------------------------------------------------------
@@ -529,7 +531,7 @@ template:
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.2.0"
+        state: "1.0.0"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"

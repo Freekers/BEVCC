@@ -5,6 +5,12 @@ Alle noemenswaardige wijzigingen in BEVCC. Versies volgen
 (2.0.0) betekent dat je iets moet aanpassen (bijvoorbeeld in secrets.yaml of je
 dashboard); dat staat dan bij die versie.
 
+## [1.2.1] - 2026-10-26
+
+Na een boost wacht BEVCC 5 minuten voordat een nieuwe boost kan starten. De boost
+verandert zelf de vermogens die BEVCC meet (het EMS reageert op de auto); zonder die rust
+kan een boost steeds aan- en uitgaan.
+
 ## [1.2.0] - 2026-10-23
 
 Boost stopt nu wanneer de import van het net onder de 'Boost min. EMS-import' − 1 kW daalt, maar nooit minder dan 0 kW.

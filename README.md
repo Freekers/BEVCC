@@ -64,7 +64,9 @@ Een boost stopt (2 minuten vertraging tegen korte dips) zodra:
 - de thuisaccu onder de *ondergrens* − 2 % zakt, of
 - bij *Boost bij* = *alleen aFRR*: de aFRR-importsessie eindigt.
 
-Na een boost wacht BEVCC 10 minuten voordat een nieuwe boost kan starten.
+Na een boost wacht BEVCC 5 minuten voordat een nieuwe boost kan starten. De boost
+verandert zelf de vermogens die BEVCC meet (het EMS reageert op de auto); zonder die rust
+kan een boost steeds aan- en uitgaan.
 
 ## Hoe BEVCC de prijs bepaalt
 
@@ -324,7 +326,7 @@ prijs: korte schommelingen in het importvermogen beëindigen de boost niet.
   dan blijft de pauze nog 15 minuten staan en geeft BEVCC daarna EVCC weer vrij.
 - **Hysterese.** Een pauze eindigt pas als de prijs 2 minuten onder *Pauze boven* −
   € 0,02 ligt; een boost heeft dezelfde marge op de prijs, 1 kW marge op het
-  importvermogen, en daarna 10 minuten rust. Zo wisselt EVCC niet bij elke minuutprijs of
+  importvermogen, en daarna 5 minuten rust. Zo wisselt EVCC niet bij elke minuutprijs of
   schommeling in het vermogen van modus.
 - **Snel = `now`.** EVCC toont *Snel*, maar de waarde in de API is `now`. BEVCC leest de
   beschikbare waarden van de modus-entiteit en gebruikt de juiste.
@@ -377,7 +379,7 @@ moeten ook de andere namen uit [Vereisten](#vereisten) kloppen.
 geschiedenis naar *Goedkope import*. Veelvoorkomende oorzaken: de thuisaccu zit onder de
 ondergrens, *Boost bij* staat op *alleen aFRR* en er is geen aFRR-sessie, de import is
 kleiner dan *Boost min. EMS-import*, de prijs ligt net boven *Boost onder*, de vorige boost
-is minder dan 10 minuten geleden, of EVCC staat niet op Smart.
+is minder dan 5 minuten geleden, of EVCC staat niet op Smart.
 
 **Er komt geen pauze.** Een pauze komt alleen als de auto echt laadt. Staat de auto
 aangesloten maar laadt hij niet, dan laat BEVCC EVCC met rust.
