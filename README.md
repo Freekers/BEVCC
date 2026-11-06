@@ -62,7 +62,8 @@ Een boost stopt (2 minuten vertraging tegen korte dips) zodra:
   2 − 1 = 1 kW): het EMS importeert (bijna) niet meer en vooral de thuisaccu voedt de
   auto, of
 - de thuisaccu onder de *ondergrens* − 2 % zakt, of
-- bij *Boost bij* = *alleen aFRR*: de aFRR-importsessie eindigt.
+- bij *Boost bij* = *alleen aFRR*: de aFRR-importsessie eindigt; bij *aFRR + dynamisch*: de
+  aFRR-sessie en de dynamische import allebei voorbij zijn.
 
 Na een boost wacht BEVCC 5 minuten voordat een nieuwe boost kan starten. De boost
 verandert zelf de vermogens die BEVCC meet (het EMS reageert op de auto); zonder die rust
@@ -86,8 +87,15 @@ De kale prijs komt per minuut uit deze bronnen, in deze volgorde:
 | geen sessie | live onbalansprijs **Afnemen** | `sensor.bevcc_tennet_onbalans` |
 | live prijs niet beschikbaar | all-in kwartierprijs van Balans | `sensor.bevcc_balans_kwartierprijs` |
 
-Of er een aFRR-importsessie loopt, weet alleen Balans: dat leest BEVCC uit de
-Balans-API (`binary_sensor.bevcc_afrr_importsessie`). De live onbalansprijzen per minuut
+Dat is de **afnameprijs** (`sensor.bevcc_afnameprijs`): de prijs voor een pauze en op het
+dashboard. Voor een **boost** geldt de **boostprijs** (`sensor.bevcc_boostprijs`): dezelfde
+prijs, behalve in een kwartier met dynamische (day-ahead) import van Balans zonder
+aFRR-sessie. Dan is het de dynamische prijs, die een dag vooraf vastligt (zie
+[Dynamische (day-ahead) import](#dynamische-day-ahead-import)).
+
+Of er een aFRR-importsessie of dynamische import loopt, weet alleen Balans: dat leest BEVCC
+uit de Balans-API (`binary_sensor.bevcc_afrr_importsessie`,
+`sensor.bevcc_balans_dynamisch_prijs`). De live onbalansprijzen per minuut
 komen van de openbare pagina met actuele onbalansprijzen van
 [Tenergy Services](https://services.tenergy.nl/public.aspx/actualimbalanceprices), op
 basis van TenneT-gegevens.
@@ -175,7 +183,7 @@ updates.
 |---|---|---|---|
 | Pauze boven | `input_number.bevcc_pauze_boven` | € 0,35 | All-in prijs waarboven het laden pauzeert. |
 | Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op het minimum (− € 0,50) staat boost uit. |
-| Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + onbalans*: ook bij andere EMS-import. Zie [ontwerpkeuzes](#alleen-afrr-of-ook-onbalans). |
+| Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + dynamisch*: ook tijdens dynamische (day-ahead) import. *aFRR + onbalans*: bij alle EMS-import, dus ook dynamisch. Zie [ontwerpkeuzes](#boost-bij-afrr-dynamisch-of-onbalans). |
 | Boost min. EMS-import | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. |
 | Accu-ondergrens | `input_number.bevcc_accu_ondergrens` | 50 % | Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder. |
 | Energiebelasting | `input_number.bevcc_energiebelasting` | € 0,11085 | Per kWh incl. btw, 2026, eerste schijf. **Elk jaar per 1 januari bijwerken.** |
@@ -256,7 +264,40 @@ Balans meldt een nieuw kwartier pas na een paar minuten. Om een lopende sessie n
 elke kwartierwissel te onderbreken, telt in de eerste 5 minuten van een kwartier een
 importsessie in het vorige kwartier ook.
 
-### Alleen aFRR of ook onbalans?
+### Dynamische (day-ahead) import
+
+Sinds begin november 2026 laat de Balans-API ook dynamische import zien: het EMS koopt dan
+een dag vooraf (day-ahead) stroom in voor de thuisaccu. Het Balans-dashboard noemt dat
+*Dynamisch*. Per kwartier staat dan vast hoeveel er wordt afgenomen (bijvoorbeeld 9,8 kW)
+en tegen welke prijs. Tijdens zo'n kwartier houdt het EMS de netafname op het plan:
+verbruikt het huis meer, dan laadt de thuisaccu minder. Gaat de auto laden, dan krijgt hij
+dus de stroom die anders de thuisaccu in ging.
+
+BEVCC gebruikt de dynamische prijs daarom **alleen voor een boost**, en alleen in een
+kwartier met dynamische import zonder aFRR-sessie, bij *Boost bij* = *aFRR + dynamisch* of
+*aFRR + onbalans*:
+
+- **Geen pauze op de dynamische prijs.** Het dynamische volume is al ingekocht. Een pauze
+  bespaart daar niets op; er gaat alleen meer naar de thuisaccu. Een pauze blijft dus de
+  afnameprijs gebruiken (aFRR of *Afnemen*).
+- **Dynamisch + aFRR: de aFRR-prijs.** Een kwartier kan tegelijk dynamisch zijn en een
+  aFRR-importsessie hebben: bovenop het plan neemt het EMS dan extra af voor TenneT. Het
+  Balans-dashboard toont daarvoor *Dynamisch + aFRR* met een gewoon gemiddelde van beide
+  prijzen. BEVCC beslist in zo'n kwartier op de aFRR-prijs, net als zonder dynamische
+  import: de aFRR-sessie is de goedkope import waar een boost om draait.
+
+In de eerste dagen met dynamische import (3 en 5 november 2026) lag de dynamische prijs in
+elk kwartier boven de aFRR-prijs: rond € 0,20–0,23 kaal tegen € 0,10–0,20. Een boost op de
+dynamische prijs komt dus vooral voor bij lage day-ahead prijzen, zoals op zonnige
+middagen.
+
+Balans meldt een dynamisch kwartier pas een paar minuten na de start; de dynamische prijs
+is daardoor pas na ongeveer 4 minuten bekend. In de eerste 5 minuten van een kwartier geldt
+de dynamische prijs van het vorige kwartier, als dat ook dynamisch was: dynamische import
+loopt vaak meerdere kwartieren achter elkaar. Na het laatste kwartier van zo'n blok loopt
+de dynamische prijs daardoor nog een paar minuten door.
+
+### Boost bij: aFRR, dynamisch of onbalans?
 
 Met **Boost bij** kies je welke EMS-import een boost mag starten:
 
@@ -265,12 +306,16 @@ Met **Boost bij** kies je welke EMS-import een boost mag starten:
   inzet. Worden er later in het kwartier meer biedingen ingezet, dan kan die prijs
   alleen nog **dalen**. Wat BEVCC tijdens het kwartier ziet is dus een bovengrens: is
   het goedkoop genoeg, dan blijft het dat.
-- **aFRR + onbalans**: ook als het EMS om een andere reden importeert. Die import wordt
+- **aFRR + dynamisch**: ook tijdens dynamische import, op de dynamische prijs. Die staat
+  een dag vooraf vast, dus nog betrouwbaarder dan aFRR. Wel krijgt de auto stroom die het
+  EMS voor de thuisaccu had ingekocht; de ondergrens van de thuisaccu blijft gelden.
+- **aFRR + onbalans**: ook als het EMS om een andere reden importeert (en dus ook bij
+  dynamische import). Die andere import wordt
   afgerekend tegen de onbalansprijs *Afnemen* van het kwartier, en die staat pas aan het
   eind vast. Een goedkope minuut kan alsnog een duur kwartier worden, bijvoorbeeld als
   TenneT later in het kwartier ook moet opregelen (regeltoestand 2): dan geldt voor
-  afname de hoogste prijs. Daarom wacht BEVCC zonder aFRR-sessie eerst 90 seconden of
-  de import aanhoudt.
+  afname de hoogste prijs. Daarom wacht BEVCC zonder aFRR-sessie of dynamische import
+  eerst 90 seconden of de import aanhoudt.
 
 ### Pauze alleen terwijl de auto laadt
 
@@ -348,12 +393,14 @@ standaardwaarden; tot die tijd doet BEVCC niets.
 
 | Entiteit | Wat |
 |---|---|
-| `sensor.bevcc_afnameprijs` | All-in afnameprijs voor de beslissingen (attribuut `kaal`: kale prijs in €/kWh) |
+| `sensor.bevcc_afnameprijs` | All-in afnameprijs voor een pauze en op het dashboard (attribuut `kaal`: kale prijs in €/kWh) |
+| `sensor.bevcc_boostprijs` | All-in prijs voor een boost: de afnameprijs, of in een kwartier met alleen dynamische import de dynamische prijs (attribuut `bron`) |
 | `sensor.bevcc_prijsbron` | Welke bron de prijs nu levert |
 | `sensor.bevcc_tennet_onbalans` | Live onbalansprijs *Afnemen* (€/MWh); attributen `afnemen`, `invoeden`, `tijd` |
 | `binary_sensor.bevcc_afrr_importsessie` | Balans meldt een aFRR-importsessie voor jouw EMS |
-| `sensor.bevcc_balans_kwartierprijs` | All-in kwartierprijs volgens Balans |
+| `sensor.bevcc_balans_kwartierprijs` | All-in kwartierprijs zoals het Balans-dashboard hem toont (ook *Dynamisch* en *Dynamisch + aFRR*) |
 | `sensor.bevcc_balans_afrr_importprijs` | Kale aFRR-importprijs van het lopende kwartier |
+| `sensor.bevcc_balans_dynamisch_prijs` | Kale dynamische (day-ahead) prijs; alleen beschikbaar in kwartieren met dynamische import |
 | `binary_sensor.bevcc_prijspiek` | Prijs boven *Pauze boven* |
 | `binary_sensor.bevcc_ems_import` | Het EMS importeert al 90 seconden |
 | `binary_sensor.bevcc_goedkope_import` | Voorwaarden voor een boost |
@@ -377,7 +424,8 @@ moeten ook de andere namen uit [Vereisten](#vereisten) kloppen.
 
 **Er komt geen boost.** Kijk op de kaart bij *Details* naar *Doel op dit moment* en in de
 geschiedenis naar *Goedkope import*. Veelvoorkomende oorzaken: de thuisaccu zit onder de
-ondergrens, *Boost bij* staat op *alleen aFRR* en er is geen aFRR-sessie, de import is
+ondergrens, *Boost bij* staat op *alleen aFRR* en er is geen aFRR-sessie (dynamische import
+telt dan niet mee), de import is
 kleiner dan *Boost min. EMS-import*, de prijs ligt net boven *Boost onder*, de vorige boost
 is minder dan 5 minuten geleden, of EVCC staat niet op Smart.
 
@@ -409,8 +457,12 @@ pauze, boost en vrijgave met prijs, bron, netvermogen en thuisaccu.
 - De onbalanspagina van Tenergy wordt uitgelezen (*scraping*); een andere opmaak kan de
   live prijs laten wegvallen (dan is er terugval op de kwartierprijs van Balans).
 - De minuutprijs is een voorlopige waarde. De afrekening van Balans gebruikt de definitieve
-  kwartierprijs; die kan anders uitvallen (zie [Alleen aFRR of ook
-  onbalans?](#alleen-afrr-of-ook-onbalans)).
+  kwartierprijs; die kan anders uitvallen (zie [Boost bij: aFRR, dynamisch of
+  onbalans?](#boost-bij-afrr-dynamisch-of-onbalans)).
+- De dynamische prijs is pas een paar minuten na de start van een kwartier bekend, en loopt
+  na een dynamisch blok nog een paar minuten door. Hoe Balans een kwartier met
+  *Dynamisch + aFRR* precies afrekent, staat niet in de API (zie [Dynamische (day-ahead)
+  import](#dynamische-day-ahead-import)).
 - BEVCC stuurt één laadpunt.
 - De energiebelasting is die van de eerste schijf (tot 10.000 kWh per jaar).
 - Getest met één opstelling: EVCC met een Alfen-laadpaal en een thuisbatterij met het

@@ -35,7 +35,10 @@ def base(**kw):
         "input_boolean.bevcc_standaardwaarden": S(kw.get("standaard", "on")),
         "binary_sensor.bevcc_afrr_importsessie": S(kw.get("sessie", "off")),
         "binary_sensor.bevcc_ems_import": S(kw.get("ems", "off")),
+        "sensor.bevcc_balans_dynamisch_prijs": S(kw.get("dyn", "unavailable")),
     }
+    # Boostprijs uit de afnameprijs en de dynamische prijs (sectie 3).
+    db["sensor.bevcc_boostprijs"] = S(ha.render(ha.find("sensor", "BEVCC boostprijs")["state"], db))
     # Sectie 2: de koppeling rendert de bevcc-entiteiten uit de EVCC-entiteiten.
     for section, name, eid in [
         ("sensor", "BEVCC net vermogen", "sensor.bevcc_net_vermogen"),
@@ -153,10 +156,41 @@ def test_boost_bij(kw, this, verwacht):
     assert bs(GI, base(**kw), this) is verwacht
 
 
+AD = "aFRR + dynamisch"
+# dynamisch importplan van ~10 kW; dynamische prijs 0,04 kaal (boostprijs 0,179), Afnemen 0,12 (0,276)
+DYN = dict(net=10200, accu=-9100, kaal=120, dyn=0.04)
+
+
+@pytest.mark.parametrize("kw, this, verwacht", [
+    (dict(DYN, boost_bij=AD), "off", True),                       # dynamisch: direct
+    (dict(DYN, boost_bij=A), "off", False),                       # alleen aFRR: niet
+    (dict(DYN), "off", True),                                     # aFRR + onbalans: direct (geen 90 s)
+    (dict(DYN, boost_bij=AD, dyn="unavailable", ems="on"), "off", False),  # onbalans-import telt niet
+    (dict(DYN, boost_bij=AD), "on", True),
+    (dict(DYN, boost_bij=AD, dyn="unavailable"), "on", False),    # dynamisch voorbij -> stoppen
+    (dict(DYN, boost_bij=AD, dyn="unavailable", sessie="on", kaal=40), "on", True),  # aFRR loopt nog
+    (dict(DYN, boost_bij=A, sessie="on", kaal=40), "on", True),
+    # dynamisch + aFRR: de aFRR-prijs beslist, ook als de dynamische prijs hoger is (5 nov)
+    (dict(DYN, boost_bij=A, sessie="on", kaal=30, dyn=0.20), "off", True),
+    (dict(DYN, boost_bij=AD, sessie="on", kaal=30, dyn=0.20), "off", True),
+    # alleen dynamisch, maar te duur: geen boost, ook al is Afnemen goedkoop
+    (dict(DYN, boost_bij=AD, kaal=30, dyn=0.20), "off", False),
+])
+def test_boost_bij_dynamisch(kw, this, verwacht):
+    assert bs(GI, base(**kw), this) is verwacht
+
+
 def test_goedkope_import_prijs_onbekend():
     db = base(**IMPORT, sessie="on")
     db["sensor.bevcc_afnameprijs"] = S("unavailable")
+    db["sensor.bevcc_boostprijs"] = S(ha.render(ha.find("sensor", "BEVCC boostprijs")["state"], db))
+    assert db["sensor.bevcc_boostprijs"].state == "unavailable"
     assert not bs(GI, db)
+
+
+def test_prijspiek_negeert_dynamisch():
+    # 5 nov 11:15: dynamisch 0,202 (0,376 all-in), aFRR 0,145 (0,306): geen pauze
+    assert not bs("BEVCC prijspiek", base(kaal=145, dyn=0.20239, sessie="on"))
 
 
 def test_prijspiek_met_hysterese():

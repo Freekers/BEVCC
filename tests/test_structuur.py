@@ -114,7 +114,8 @@ def _markdown_kaarten(node):
             yield from _markdown_kaarten(v)
 
 
-@pytest.mark.parametrize("boost_bij, grens", [("alleen aFRR", 0.20), ("aFRR + onbalans", 0.20), ("alleen aFRR", -0.5)])
+@pytest.mark.parametrize("boost_bij, grens", [("alleen aFRR", 0.20), ("aFRR + dynamisch", 0.20), ("aFRR + onbalans", 0.20),
+                                             ("alleen aFRR", -0.5)])
 def test_dashboard_templates_renderen(boost_bij, grens):
     db = {
         "sensor.bevcc_afnameprijs": S(0.39088, {"kaal": 0.2149}),

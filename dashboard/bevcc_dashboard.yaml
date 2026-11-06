@@ -9,6 +9,7 @@ cards:
       {% set p = states('sensor.bevcc_afnameprijs') %}
       {% set kaal = state_attr('sensor.bevcc_afnameprijs', 'kaal') %}
       {% set balans = states('sensor.bevcc_balans_kwartierprijs') %}
+      {% set bp = states('sensor.bevcc_boostprijs') %}
       {% set cap = states('input_number.bevcc_pauze_boven') | float(0.35) %}
       {% set boost = states('input_number.bevcc_boost_onder') | float(0.20) %}
       {% set vast = states('input_number.bevcc_energiebelasting') | float(0.11085) + states('input_number.bevcc_leverkosten') | float(0.02) %}
@@ -16,17 +17,19 @@ cards:
       {% set min_kw = states('input_number.bevcc_boost_min_import') | float(2) %}
       {% set min_import = '%g' | format(min_kw) | replace('.', ',') %}
       {% set door_import = '%g' | format([min_kw - 1, 0] | max) | replace('.', ',') %}
-      {% set alleen_afrr = not is_state('input_select.bevcc_boost_bij', 'aFRR + onbalans') %}
+      {% set bij = states('input_select.bevcc_boost_bij') %}
+      {% set bronnen = {'aFRR + dynamisch': 'aFRR-sessie of dynamische import'}.get(bij, 'aFRR-sessie') %}
       ## {{ ('€ %.3f' | format(p | float) | replace('.', ',')) if is_number(p) else 'prijs onbekend' }} /kWh · {{ states('input_select.bevcc_status') }}
       Bron: **{{ states('sensor.bevcc_prijsbron') }}**{% if is_number(kaal) %} (kaal € {{ '%.3f' | format(kaal | float) | replace('.', ',') }}){% endif %}
       {% if is_number(balans) %} · Balans kwartierprijs € {{ '%.3f' | format(balans | float) | replace('.', ',') }}{% endif %}
+      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}
 
       Pauze boven **€ {{ '%.2f' | format(cap) | replace('.', ',') }}** (≈ {{ ((cap - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal), alleen terwijl de auto laadt ·
       {% if boost <= -0.5 %}boost staat **uit** (Boost onder op het minimum).
       {% else %}boost naar Snel onder **€ {{ '%.2f' | format(boost) | replace('.', ',') }}** (≈ {{ ((boost - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal)
-      {% if alleen_afrr %}tijdens een aFRR-importsessie van ≥ {{ min_import }} kW{% else %}als het EMS ≥ {{ min_import }} kW importeert (direct bij een aFRR-sessie, anders na 90 s){% endif %}
+      {% if bij == 'aFRR + onbalans' %}als het EMS ≥ {{ min_import }} kW importeert (direct bij een aFRR-sessie of dynamische import, anders na 90 s){% else %}tijdens een {{ bronnen }} van ≥ {{ min_import }} kW{% endif %}
       en de thuisaccu ≥ {{ vloer }} % is.
-      Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if alleen_afrr %} als de aFRR-sessie eindigt,{% endif %} als het net onder {{ door_import }} kW zakt
+      Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if bij != 'aFRR + onbalans' %} als de {{ bronnen }} eindigt,{% endif %} als het net onder {{ door_import }} kW zakt
       of als de thuisaccu onder {{ vloer - 2 }} % komt.{% endif %}
 
   # --- Meldingen ---
@@ -185,6 +188,8 @@ cards:
     entities:
       - entity: sensor.bevcc_afnameprijs
         name: Afnameprijs all-in (live)
+      - entity: sensor.bevcc_boostprijs
+        name: Boostprijs all-in
       - entity: sensor.bevcc_balans_kwartierprijs
         name: Balans kwartierprijs
       - entity: input_number.bevcc_pauze_boven
@@ -242,6 +247,8 @@ cards:
         name: aFRR-importsessie (Balans)
       - entity: sensor.bevcc_balans_afrr_importprijs
         name: Balans aFRR-importprijs (kaal)
+      - entity: sensor.bevcc_balans_dynamisch_prijs
+        name: Balans dynamische prijs (kaal)
       - entity: sensor.bevcc_tennet_onbalans
         name: TenneT afnemen (kaal, €/MWh)
       - type: section

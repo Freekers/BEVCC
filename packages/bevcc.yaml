@@ -29,6 +29,8 @@
 #   - anders: de live onbalansprijs 'Afnemen'.
 #   (TenneT-gegevens per minuut, via services.tenergy.nl)
 #   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans.
+# Voor een boost (sensor.bevcc_boostprijs) geldt in een kwartier met
+# dynamische (day-ahead) import zonder aFRR-sessie de dynamische prijs.
 #
 # Installatie en uitleg: zie README.md. Kort:
 #   1. secrets.yaml:
@@ -129,18 +131,22 @@ input_number:
     icon: mdi:cash-plus
 
 input_select:
-  # Welke EMS-import een boost mag starten:
-  #   alleen aFRR      alleen tijdens een aFRR-importsessie van Balans. De
-  #                    aFRR-importprijs is de afregelprijs, en die kan binnen
-  #                    het kwartier alleen nog dalen.
-  #   aFRR + onbalans  ook bij andere EMS-import, afgerekend tegen de
-  #                    onbalansprijs 'Afnemen', die aan het eind van het
-  #                    kwartier nog kan stijgen (bijvoorbeeld regeltoestand 2).
+  # Welke EMS-import een boost mag starten (van betrouwbaar naar ruim):
+  #   alleen aFRR       alleen tijdens een aFRR-importsessie van Balans. De
+  #                     aFRR-importprijs is de afregelprijs, en die kan binnen
+  #                     het kwartier alleen nog dalen.
+  #   aFRR + dynamisch  ook tijdens dynamische (day-ahead) import van Balans.
+  #                     Die prijs staat een dag vooraf vast.
+  #   aFRR + onbalans   ook bij alle andere EMS-import (dus ook dynamisch),
+  #                     afgerekend tegen de onbalansprijs 'Afnemen', die aan
+  #                     het eind van het kwartier nog kan stijgen
+  #                     (bijvoorbeeld regeltoestand 2).
   bevcc_boost_bij:
     name: "BEVCC boost bij"
     icon: mdi:source-branch-check
     options:
       - alleen aFRR
+      - aFRR + dynamisch
       - aFRR + onbalans
   # Status, beheerd door de automatisering - niet zelf wijzigen.
   bevcc_status:
@@ -193,10 +199,12 @@ rest:
           {{ 'import' in cur or ('import' in prev and nu - q < 300000) }}
 
     sensor:
-      # De eigen all-in kwartierprijs van Balans: aFRR-importprijs tijdens een
-      # sessie (als Balans een bod had), anders de onbalans-afnameprijs.
-      # Balans werkt het lopende kwartier maar één keer bij (~3 min erin);
-      # alleen als laatste terugval en ter vergelijking.
+      # De eigen all-in kwartierprijs van Balans, zoals het Balans-dashboard
+      # hem toont: aFRR-importprijs tijdens een sessie (als Balans een bod
+      # had), de dynamische prijs tijdens dynamische import, het gemiddelde
+      # van die twee ('Dynamisch + aFRR') als beide spelen, en anders de
+      # onbalans-afnameprijs. Balans werkt het lopende kwartier pas een paar
+      # minuten na de start bij; alleen als laatste terugval en ter vergelijking.
       - name: "BEVCC Balans kwartierprijs"
         unique_id: bevcc_balans_kwartierprijs
         unit_of_measurement: "EUR/kWh"
@@ -216,8 +224,14 @@ rest:
           {% for p in data.get('prices', []) if p.start <= nu < p.end %}
             {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
                           | map(attribute='directions') | first | default([], true) %}
-            {% set afrr = p['values']['afrr_import'] %}
-            {% set ns.kaal = afrr if 'import' in dirs and afrr is number else p['values']['onbalans_import'] %}
+            {% set v = p['values'] %}
+            {% set afrr = v['afrr_import'] if 'import' in dirs and v['afrr_import'] is number else none %}
+            {% set dyn = v['day_ahead_import'] if v['day_ahead_import'] is number else none %}
+            {% if afrr is not none and dyn is not none and v['day_ahead_afrr_import'] is number %}
+              {% set ns.kaal = v['day_ahead_afrr_import'] %}
+            {% elif afrr is not none %}{% set ns.kaal = afrr %}
+            {% elif dyn is not none %}{% set ns.kaal = dyn %}
+            {% else %}{% set ns.kaal = v['onbalans_import'] %}{% endif %}
           {% endfor %}
           {{ (ns.kaal * 1.21 + leverkosten + eb) | round(5) if ns.kaal is number else none }}
 
@@ -241,6 +255,35 @@ rest:
             {% set ns.v = p['values']['afrr_import'] %}
           {% endfor %}
           {{ ns.v | round(5) if ns.v is number else none }}
+
+      # Dynamische (day-ahead) importprijs van Balans voor het lopende kwartier
+      # (kaal, EUR/kWh); alleen beschikbaar in kwartieren met een dynamisch
+      # importplan. Balans meldt het kwartier pas na een paar minuten: tot
+      # dan geldt in de eerste 5 min de prijs van het vorige kwartier, als dat
+      # ook dynamisch was (dynamische blokken zijn vaak meerdere kwartieren).
+      - name: "BEVCC Balans dynamisch prijs"
+        unique_id: bevcc_balans_dynamisch_prijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:calendar-clock
+        availability: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set q = nu - nu % 900000 %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set prijzen = data.get('prices', []) %}
+          {% set cur = prijzen | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu) | list %}
+          {% set prev = prijzen | selectattr('start', 'eq', q - 900000) | list if nu - q < 300000 else [] %}
+          {{ (cur if cur else prev) | selectattr('values.day_ahead_import', 'number') | list | count > 0 }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set q = nu - nu % 900000 %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set prijzen = data.get('prices', []) %}
+          {% set cur = prijzen | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu) | list %}
+          {% set prev = prijzen | selectattr('start', 'eq', q - 900000) | list if nu - q < 300000 else [] %}
+          {% set v = (cur if cur else prev) | selectattr('values.day_ahead_import', 'number')
+                     | map(attribute='values.day_ahead_import') | first | default(none) %}
+          {{ v | round(5) if v is number else none }}
 
   # Nieuwste BEVCC-versie op GitHub (elke 6 uur), voor de update-melding.
   - resource: https://api.github.com/repos/Freekers/BEVCC/releases/latest
@@ -377,10 +420,15 @@ template:
         state: "{{ states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_soc') | float | round(1) }}"
 
   # ---------------------------------------------------------------------------
-  # 3. Prijs voor de beslissingen: Balans-sessie + live TenneT-prijs
-  #    Tijdens een aFRR-importsessie: TenneT 'Invoeden' (afregelprijs), anders
-  #    de aFRR-prijs van Balans. Zonder sessie: TenneT 'Afnemen', anders de
-  #    kwartierprijs van Balans.
+  # 3. Prijs voor de beslissingen
+  #    Afnameprijs (pauze, dashboard): wat extra afname nu kost.
+  #      Tijdens een aFRR-importsessie: TenneT 'Invoeden' (afregelprijs),
+  #      anders de aFRR-prijs van Balans. Zonder sessie: TenneT 'Afnemen',
+  #      anders de kwartierprijs van Balans. De dynamische (day-ahead) prijs
+  #      telt hier niet mee: dat volume is al ingekocht en het EMS houdt de
+  #      netafname op het plan, dus een pauze bespaart daarop niets.
+  #    Boostprijs: de afnameprijs, behalve in een kwartier met dynamische
+  #      import zonder aFRR-sessie: dan de dynamische prijs.
   #    All-in = 1,21 x kaal + leverkosten + energiebelasting.
   # ---------------------------------------------------------------------------
   - sensor:
@@ -435,6 +483,32 @@ template:
           {% elif is_number(states('sensor.bevcc_balans_kwartierprijs')) %}Balans kwartierprijs
           {% else %}onbekend{% endif %}
 
+      # Prijs voor de boostbeslissing (all-in). Gelijk aan de afnameprijs,
+      # behalve in een kwartier met dynamische import zonder aFRR-sessie:
+      # dan krijgt de auto stroom uit het dynamische volume, tegen de
+      # dynamische prijs. In een kwartier met dynamisch + aFRR geldt de
+      # aFRR-prijs: de sessie is de goedkope import die de boost waard is.
+      - name: "BEVCC boostprijs"
+        unique_id: bevcc_boostprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:cash-fast
+        availability: >-
+          {{ is_number(states('sensor.bevcc_afnameprijs'))
+             or is_number(states('sensor.bevcc_balans_dynamisch_prijs')) }}
+        state: >-
+          {% set dyn = states('sensor.bevcc_balans_dynamisch_prijs') %}
+          {% if is_number(dyn) and not is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
+            {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
+            {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
+            {{ (dyn | float * 1.21 + leverkosten + eb) | round(5) }}
+          {% else %}{{ states('sensor.bevcc_afnameprijs') }}{% endif %}
+        attributes:
+          bron: >-
+            {% if is_number(states('sensor.bevcc_balans_dynamisch_prijs'))
+                  and not is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}dynamisch (day-ahead)
+            {% else %}{{ states('sensor.bevcc_prijsbron') }}{% endif %}
+
   # ---------------------------------------------------------------------------
   # 4. Voorwaarden
   # ---------------------------------------------------------------------------
@@ -465,9 +539,11 @@ template:
           {{ accu < -500 and net - auto > min_import }}
 
       # Start: thuisaccu op of boven de ondergrens, het EMS importeert nu, de
-      # all-in prijs ligt onder 'Boost onder', en
+      # boostprijs ligt onder 'Boost onder', en
       #   - Balans meldt een aFRR-importsessie (direct - de sessie bewijst dat
       #     de import echt is), of
+      #   - bij 'Boost bij' = 'aFRR + dynamisch' of 'aFRR + onbalans': het is
+      #     een kwartier met dynamische import (ook direct), of
       #   - alleen bij 'Boost bij' = 'aFRR + onbalans': de import duurt al 90 s.
       # Doorgaan zolang:
       #   - de prijs onder 'Boost onder' + 0,02 blijft, en
@@ -477,7 +553,8 @@ template:
       #     start. Zakt de netafname hieronder, dan voedt vooral de thuisaccu
       #     de auto en is de goedkope import (grotendeels) voorbij, en
       #   - de thuisaccu boven de ondergrens - 2 % blijft (onbekend -> stop), en
-      #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt.
+      #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt; bij
+      #     'aFRR + dynamisch': de aFRR-sessie of de dynamische import nog loopt.
       # 2 min uitstelvertraging tegen korte dips, 5 min rust na een boost (de boost
       # verandert zelf de vermogens die hier gemeten worden; zonder rust kan hij
       # blijven aan- en uitgaan).
@@ -488,7 +565,7 @@ template:
         icon: mdi:transmission-tower-import
         delay_off: "00:02:00"
         state: >-
-          {% set prijs = states('sensor.bevcc_afnameprijs') | float(99) %}
+          {% set prijs = states('sensor.bevcc_boostprijs') | float(99) %}
           {% set grens = states('input_number.bevcc_boost_onder') | float(0.20) %}
           {% set min_import = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
           {% set ondergrens = states('input_number.bevcc_accu_ondergrens') | float(0) %}
@@ -497,13 +574,16 @@ template:
           {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
           {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
           {% set sessie = is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}
-          {% set ook_onbalans = is_state('input_select.bevcc_boost_bij', 'aFRR + onbalans') %}
+          {% set bij = states('input_select.bevcc_boost_bij') %}
+          {% set ook_onbalans = bij == 'aFRR + onbalans' %}
+          {% set ook_dynamisch = bij in ['aFRR + dynamisch', 'aFRR + onbalans'] %}
+          {% set dynamisch = ook_dynamisch and is_number(states('sensor.bevcc_balans_dynamisch_prijs')) %}
           {% if this.state == 'on' %}
             {{ prijs < grens + 0.02 and net > [min_import - 1000, 0] | max
-               and soc >= ondergrens - 2 and (sessie or ook_onbalans) }}
+               and soc >= ondergrens - 2 and (sessie or dynamisch or ook_onbalans) }}
           {% else %}
             {{ grens > -0.5 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
-               and (sessie or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
+               and (sessie or dynamisch or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
                and now() - this.last_changed > timedelta(minutes=5) }}
           {% endif %}
 
@@ -531,7 +611,7 @@ template:
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.2.1"
+        state: "1.3.0"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"
@@ -744,7 +824,9 @@ automation:
               - action: logbook.log
                 data:
                   name: BEVCC
-                  message: "Boost (goedkope EMS-import): {{ info }}; daarna terug naar 'smart'"
+                  message: >-
+                    Boost (goedkope EMS-import, boostprijs € {{ states('sensor.bevcc_boostprijs') }}/kWh,
+                    {{ state_attr('sensor.bevcc_boostprijs', 'bron') }}): {{ info }}; daarna terug naar 'smart'
                   entity_id: select.bevcc_evcc_modus
 
           # F) Vrijgeven: situatie voorbij (of een boost tijdens een pauze vanuit Snel)

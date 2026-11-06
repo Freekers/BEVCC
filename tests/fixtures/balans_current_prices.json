@@ -1,5 +1,5 @@
 {
-  "_toelichting": "Synthetische testdata in de vorm van /customer/current-prices/api/ van Balans Energie. Kwartieren vanaf 2026-10-17 10:00 UTC: Q0 geen sessie (wel een aFRR-bod), Q1 aFRR-importsessie, Q2 geen sessie (overloop uit Q1), Q3 aFRR-exportsessie met prijspiek, Q4 (11:00) nog niet gemeld.",
+  "_toelichting": "Synthetische testdata in de vorm van /customer/current-prices/api/ van Balans Energie (vorm van november 2026, met dayAheadPlans). Kwartieren vanaf 2026-10-17 10:00 UTC: Q0 geen sessie (wel een aFRR-bod), Q1 aFRR-importsessie, Q2 geen sessie (overloop uit Q1; alleen controlDirections import en missing_bid), Q3 aFRR-exportsessie met prijspiek, Q4 (11:00) dynamische import, Q5 (11:15) dynamische import + aFRR-importsessie, Q6 (11:30) nog niet gemeld.",
   "prices": [
     {
       "start": 1792231200000,
@@ -44,18 +44,18 @@
       "values": {
         "onbalans_import": 0.19,
         "onbalans_export": 0.14,
-        "afrr_import": 0.15,
-        "afrr_export": 0.25
+        "afrr_import": null,
+        "afrr_export": null
       },
       "afrrBidStatus": {
-        "import": "confirmed",
-        "export": "confirmed"
+        "import": "missing_bid",
+        "export": "missing_bid"
       }
     },
     {
       "start": 1792233900000,
       "end": 1792234800000,
-      "provisional": true,
+      "provisional": false,
       "fresh": true,
       "updatedAt": null,
       "values": {
@@ -68,13 +68,69 @@
         "import": "none",
         "export": "confirmed"
       }
+    },
+    {
+      "start": 1792234800000,
+      "end": 1792235700000,
+      "provisional": true,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 0.12,
+        "onbalans_export": 0.08,
+        "afrr_import": 0.15,
+        "afrr_export": 0.3,
+        "day_ahead_import": 0.05,
+        "day_ahead_afrr_import": 0.1
+      },
+      "afrrBidStatus": {
+        "import": "confirmed",
+        "export": "confirmed"
+      },
+      "checkedAt": 1792236660000
+    },
+    {
+      "start": 1792235700000,
+      "end": 1792236600000,
+      "provisional": true,
+      "fresh": true,
+      "updatedAt": null,
+      "values": {
+        "onbalans_import": 0.1,
+        "onbalans_export": 0.02,
+        "afrr_import": 0.02,
+        "afrr_export": 0.3,
+        "day_ahead_import": 0.06,
+        "day_ahead_afrr_import": 0.04
+      },
+      "afrrBidStatus": {
+        "import": "confirmed",
+        "export": "confirmed"
+      },
+      "checkedAt": 1792236660000
     }
   ],
+  "dayAheadPlans": [
+    {
+      "start": 1792234800000,
+      "end": 1792235700000,
+      "direction": "import",
+      "quantityW": 9800.0
+    },
+    {
+      "start": 1792235700000,
+      "end": 1792236600000,
+      "direction": "import",
+      "quantityW": 9750.0
+    }
+  ],
+  "dayAheadUnavailableWindows": [],
   "commands": [],
   "commandsAvailable": true,
   "afrrEventIsps": [
     1792232100000,
-    1792233900000
+    1792233900000,
+    1792235700000
   ],
   "afrrDiscovery": [
     {
@@ -100,7 +156,9 @@
       "directions": [],
       "observedUntil": 1792233900000,
       "complete": true,
-      "controlDirections": []
+      "controlDirections": [
+        "import"
+      ]
     },
     {
       "start": 1792233900000,
@@ -108,9 +166,27 @@
         "export"
       ],
       "observedUntil": 1792234800000,
-      "complete": false,
+      "complete": true,
       "controlDirections": [
         "export"
+      ]
+    },
+    {
+      "start": 1792234800000,
+      "directions": [],
+      "observedUntil": 1792235700000,
+      "complete": true,
+      "controlDirections": []
+    },
+    {
+      "start": 1792235700000,
+      "directions": [
+        "import"
+      ],
+      "observedUntil": 1792236600000,
+      "complete": true,
+      "controlDirections": [
+        "import"
       ]
     }
   ],
@@ -119,8 +195,8 @@
   "windows": [
     [
       1792144800000,
-      1792234800000
+      1792236660000
     ]
   ],
-  "generatedAt": 1792234860000
+  "generatedAt": 1792236660000
 }
