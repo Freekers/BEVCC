@@ -19,7 +19,7 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
   van 5 kW. Na de boost komt de oorspronkelijke maximale stroom terug. Met de regeling
   start een boost alleen als de auto minstens op zijn minimale stroom kan laden, en stopt
   hij als de thuisaccu toch 2 minuten lang meer dan 1 kW ontlaadt.
-- **Boost bij export** (`input_number.bevcc_boost_export_onder`, kaal): verkoopt het EMS
+- **Boost bij export** (`input_number.bevcc_boost_export_onder`, all-in): verkoopt het EMS
   stroom uit de thuisaccu voor deze prijs of minder, dan zet BEVCC EVCC op Snel zodat de
   auto die stroom krijgt. Met `input_boolean.bevcc_boost_export_negeer_ondergrens` geldt de
   accu-ondergrens daarbij niet. De boost loopt door zolang het net nog meer dan 0,2 kW
@@ -27,7 +27,8 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
   van een teruglevering te onderscheiden zolang er iets teruggeleverd wordt.
 - Nieuwe entiteiten: `binary_sensor.bevcc_afrr_exportsessie`,
   `binary_sensor.bevcc_dynamische_export`, `sensor.bevcc_balans_exportprijs`,
-  `sensor.bevcc_exportprijs`, `binary_sensor.bevcc_ems_export`,
+  `sensor.bevcc_exportprijs` (all-in, zelfde formule als de afnameprijs; attribuut `kaal`),
+  `binary_sensor.bevcc_ems_export`,
   `binary_sensor.bevcc_goedkope_export`, `sensor.bevcc_laadstroom_doel`,
   `select.bevcc_evcc_max_laadstroom`, `sensor.bevcc_min_laadstroom`,
   `sensor.bevcc_laadfasen` en de automatisering *BEVCC laadstroomregeling*.

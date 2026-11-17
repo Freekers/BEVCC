@@ -15,8 +15,8 @@
 #                            'Boost onder' en de thuisaccu zit op of boven de
 #                            ondergrens (alleen vanuit Smart)
 #                            of goedkope EMS-export: het EMS levert stroom uit
-#                            de thuisaccu terug voor een kale prijs op of onder
-#                            'Boost bij export onder' (standaard uit)
+#                            de thuisaccu terug voor een all-in prijs op of
+#                            onder 'Boost bij export onder' (standaard uit)
 #
 #   Laadstroom regelen (optioneel): tijdens een boost zet BEVCC de maximale
 #   laadstroom van EVCC zo, dat de auto niet meer neemt dan er naar de
@@ -38,9 +38,9 @@
 #   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans.
 # Voor een boost (sensor.bevcc_boostprijs) geldt in een kwartier met
 # dynamische (day-ahead) import zonder aFRR-sessie de dynamische prijs.
-# Voor een boost bij export (sensor.bevcc_exportprijs, kaal): tijdens een
+# Voor een boost bij export (sensor.bevcc_exportprijs): tijdens een
 # aFRR-exportsessie de live onbalansprijs 'Afnemen' (opregelprijs), anders
-# 'Invoeden'.
+# 'Invoeden'. Ook all-in, met dezelfde formule als de afnameprijs.
 #
 # Installatie en uitleg: zie README.md. Kort:
 #   1. secrets.yaml:
@@ -110,14 +110,15 @@ input_number:
     step: 0.01
     mode: box
     icon: mdi:cash-fast
-  # Kale exportprijs (wat het EMS voor teruggeleverde stroom krijgt) waarop of
-  # waaronder BEVCC de auto laat laden van de thuisaccu in plaats van te
-  # verkopen. -0,50 (minimum, standaard) = uit.
+  # All-in exportprijs (wat het EMS voor teruggeleverde stroom krijgt,
+  # omgerekend met dezelfde formule als de afnameprijs) waarop of waaronder
+  # BEVCC de auto laat laden van de thuisaccu in plaats van te verkopen.
+  # -0,50 (minimum, standaard) = uit.
   bevcc_boost_export_onder:
-    name: "BEVCC boost bij export onder (kaal)"
+    name: "BEVCC boost bij export onder (all-in)"
     unit_of_measurement: "EUR/kWh"
     min: -0.50
-    max: 1.00
+    max: 1.50
     step: 0.01
     mode: box
     icon: mdi:cash-refund
@@ -577,9 +578,11 @@ template:
   #    Boostprijs: de afnameprijs, behalve in een kwartier met dynamische
   #      import zonder aFRR-sessie: dan de dynamische prijs.
   #    All-in = 1,21 x kaal + leverkosten + energiebelasting.
-  #    Exportprijs (kaal, boost bij export): wat het EMS nu voor teruglevering
+  #    Exportprijs (boost bij export): wat het EMS nu voor teruglevering
   #      krijgt. Tijdens een aFRR-exportsessie TenneT 'Afnemen' (opregelprijs),
-  #      anders TenneT 'Invoeden'; terugval de exportprijs van Balans.
+  #      anders TenneT 'Invoeden'; terugval de exportprijs van Balans. Ook
+  #      all-in, met dezelfde formule: zo zijn alle grenzen vergelijkbaar, en
+  #      zolang je saldeert is een teruggeleverde kWh ongeveer zoveel waard.
   # ---------------------------------------------------------------------------
   - sensor:
       - name: "BEVCC afnameprijs"
@@ -659,8 +662,9 @@ template:
                   and not is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}dynamisch (day-ahead)
             {% else %}{{ states('sensor.bevcc_prijsbron') }}{% endif %}
 
-      # Kale prijs die het EMS nu voor teruglevering krijgt (EUR/kWh), voor een
-      # boost bij export. Een aFRR-exportsessie is opregelen: afgerekend tegen
+      # All-in prijs die het EMS nu voor teruglevering krijgt (EUR/kWh), voor
+      # een boost bij export (attribuut 'kaal': de kale prijs). Zelfde formule
+      # als de afnameprijs. Een aFRR-exportsessie is opregelen: afgerekend tegen
       # de opregelprijs, de kolom 'Afnemen' (in de bekeken gegevens was de
       # aFRR-exportprijs van elk sessiekwartier gelijk aan onbalans_import).
       # Die kan binnen het kwartier alleen nog stijgen. Andere teruglevering:
@@ -680,9 +684,19 @@ template:
           {% set t = 'sensor.bevcc_tennet_onbalans' %}
           {% set kolom = 'afnemen' if is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') else 'invoeden' %}
           {% set live = state_attr(t, kolom) if has_value(t) else none %}
-          {% if is_number(live) %}{{ (live | float / 1000) | round(5) }}
-          {% else %}{{ states('sensor.bevcc_balans_exportprijs') | float(0) | round(5) }}{% endif %}
+          {% set kaal = live | float / 1000 if is_number(live) else states('sensor.bevcc_balans_exportprijs') | float(0) %}
+          {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
+          {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
+          {{ (kaal * 1.21 + leverkosten + eb) | round(5) }}
         attributes:
+          kaal: >-
+            {% set t = 'sensor.bevcc_tennet_onbalans' %}
+            {% set kolom = 'afnemen' if is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') else 'invoeden' %}
+            {% set live = state_attr(t, kolom) if has_value(t) else none %}
+            {% set balans = states('sensor.bevcc_balans_exportprijs') %}
+            {% if is_number(live) %}{{ (live | float / 1000) | round(5) }}
+            {% elif is_number(balans) %}{{ balans | float | round(5) }}
+            {% else %}{{ none }}{% endif %}
           bron: >-
             {% set t = 'sensor.bevcc_tennet_onbalans' %}
             {% set sessie = is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') %}
@@ -800,7 +814,7 @@ template:
           {{ accu > 500 and net < - min_export }}
 
       # Boost bij export: het EMS verkoopt stroom uit de thuisaccu voor een
-      # kale prijs op of onder 'Boost bij export onder'; dan liever de auto
+      # all-in prijs op of onder 'Boost bij export onder'; dan liever de auto
       # laden. Start als:
       #   - de exportprijs op of onder de grens ligt (grens -0,50 = uit),
       #   - de thuisaccu met meer dan 500 W ontlaadt en het net (met de auto)
@@ -1140,7 +1154,7 @@ automation:
                 data:
                   name: BEVCC
                   message: >-
-                    {% if reden == 'export' %}Boost (goedkope teruglevering, exportprijs € {{ states('sensor.bevcc_exportprijs') }}/kWh kaal,
+                    {% if reden == 'export' %}Boost (goedkope teruglevering, exportprijs € {{ states('sensor.bevcc_exportprijs') }}/kWh,
                     {{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% else %}Boost (goedkope EMS-import,
                     boostprijs € {{ states('sensor.bevcc_boostprijs') }}/kWh,
                     {{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}: {{ info }}; daarna terug naar 'smart'

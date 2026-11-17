@@ -254,8 +254,8 @@ def test_koppeling_min_laadstroom():
 # --- Boost bij export ----------------------------------------------------------
 
 GE = "BEVCC goedkope export"
-# EMS levert 8 kW terug uit de thuisaccu (huis 0,4 kW), exportprijs 0,10 kaal, grens 0,12
-EXPORT = dict(net=-8000, accu=8400, exportprijs=0.10, export_grens=0.12)
+# EMS levert 8 kW terug uit de thuisaccu (huis 0,4 kW), exportprijs € 0,36 all-in, grens € 0,40
+EXPORT = dict(net=-8000, accu=8400, exportprijs=0.36, export_grens=0.40)
 
 
 def test_ems_export():
@@ -271,8 +271,8 @@ def test_ems_export():
     (dict(EXPORT), "off", 60, False),                                # geen sessie, < 90 s
     (dict(EXPORT, ems_export="on"), "off", 60, True),                # teruglevering >= 90 s
     (dict(EXPORT, exportsessie="on", export_grens=-0.5), "off", 60, False),  # uit
-    (dict(EXPORT, exportsessie="on", exportprijs=0.13), "off", 60, False),
-    (dict(EXPORT, exportsessie="on", exportprijs=0.12), "off", 60, True),    # op de grens
+    (dict(EXPORT, exportsessie="on", exportprijs=0.41), "off", 60, False),
+    (dict(EXPORT, exportsessie="on", exportprijs=0.40), "off", 60, True),    # op de grens
     (dict(EXPORT, exportsessie="on", exportprijs="unavailable"), "off", 60, False),
     (dict(EXPORT, exportsessie="on", soc=40), "off", 60, False),    # onder de ondergrens
     (dict(EXPORT, exportsessie="on", soc=40, negeer="on"), "off", 60, True),
@@ -282,21 +282,21 @@ def test_ems_export():
     (dict(EXPORT, exportsessie="on"), "off", 4, False),             # 5 min rust
     # buiten de handel dekt het EMS de laadende auto (Smart) uit de thuisaccu: net ~0,
     # geen teruglevering, dus geen start (ook niet met een aFRR-exportsessie)
-    (dict(net=50, accu=4700, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, False),
-    (dict(net=-1900, accu=6500, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, False),
-    (dict(net=-2100, accu=6700, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, True),
+    (dict(net=50, accu=4700, auto_kw=4.14, exportprijs=0.36, export_grens=0.40, exportsessie="on"), "off", 60, False),
+    (dict(net=-1900, accu=6500, auto_kw=4.14, exportprijs=0.36, export_grens=0.40, exportsessie="on"), "off", 60, False),
+    (dict(net=-2100, accu=6700, auto_kw=4.14, exportprijs=0.36, export_grens=0.40, exportsessie="on"), "off", 60, True),
     # doorgaan. Teruglevering 8 kW, omvormer niet vol: auto 10 kW extra uit de thuisaccu
-    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.13, export_grens=0.12), "on", 60, True),
-    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.15, export_grens=0.12), "on", 60, False),
+    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.41, export_grens=0.40), "on", 60, True),
+    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.43, export_grens=0.40), "on", 60, False),
     # omvormer vol (12 kW), huis 0,5 kW, auto 10 kW: nog 1,5 kW teruglevering -> door
-    (dict(net=-1500, accu=12000, auto_kw=10, exportprijs=0.10, export_grens=0.12), "on", 60, True),
-    (dict(net=-300, accu=12000, auto_kw=11.2, exportprijs=0.10, export_grens=0.12), "on", 60, True),
+    (dict(net=-1500, accu=12000, auto_kw=10, exportprijs=0.36, export_grens=0.40), "on", 60, True),
+    (dict(net=-300, accu=12000, auto_kw=11.2, exportprijs=0.36, export_grens=0.40), "on", 60, True),
     # auto en huis vragen de hele omvormer (rest via de bypass van het net): niet meer
     # te onderscheiden van het EMS dat de auto dekt -> stoppen (na 2 min)
-    (dict(net=500, accu=12000, auto_kw=11.5, exportprijs=0.10, export_grens=0.12), "on", 60, False),
-    (dict(net=-150, accu=11500, auto_kw=11, exportprijs=0.10, export_grens=0.12), "on", 60, False),
+    (dict(net=500, accu=12000, auto_kw=11.5, exportprijs=0.36, export_grens=0.40), "on", 60, False),
+    (dict(net=-150, accu=11500, auto_kw=11, exportprijs=0.36, export_grens=0.40), "on", 60, False),
     # EMS stopte met terugleveren en dekt de auto: net ~0 -> stoppen
-    (dict(net=20, accu=10500, auto_kw=10, exportprijs=0.10, export_grens=0.12), "on", 60, False),
+    (dict(net=20, accu=10500, auto_kw=10, exportprijs=0.36, export_grens=0.40), "on", 60, False),
     (dict(EXPORT, soc=48.5), "on", 60, True),
     (dict(EXPORT, soc=47), "on", 60, False),
     (dict(EXPORT, soc=10, negeer="on"), "on", 60, True),

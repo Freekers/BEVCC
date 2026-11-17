@@ -116,14 +116,14 @@ def _markdown_kaarten(node):
 
 @pytest.mark.parametrize("boost_bij, grens, export, aan", [
     ("alleen aFRR", 0.20, -0.5, "off"), ("aFRR + dynamisch", 0.20, -0.5, "off"), ("aFRR + onbalans", 0.20, -0.5, "off"),
-    ("alleen aFRR", -0.5, -0.5, "off"), ("alleen aFRR", 0.20, 0.12, "on"), ("alleen aFRR", 0.20, 0.12, "off"),
+    ("alleen aFRR", -0.5, -0.5, "off"), ("alleen aFRR", 0.20, 0.30, "on"), ("alleen aFRR", 0.20, 0.40, "off"),
 ])
 def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
     db = {
         "input_number.bevcc_boost_export_onder": S(export),
         "input_boolean.bevcc_boost_export_negeer_ondergrens": S(aan),
         "input_boolean.bevcc_laadstroom_regelen": S(aan),
-        "sensor.bevcc_exportprijs": S(0.1, {"bron": "onbalans (TenneT invoeden)"}),
+        "sensor.bevcc_exportprijs": S(0.31235, {"kaal": 0.15, "bron": "onbalans (TenneT invoeden)"}),
         "select.bevcc_evcc_max_laadstroom": S(9),
         "input_text.bevcc_ingestelde_stroom": S("9"),
         "sensor.bevcc_doel": S("boost", {"reden": "export"}),
@@ -149,3 +149,18 @@ def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
     for k in kaarten:
         uit = ha.render(k, db)
         assert "€ 0,391" in uit or "<ha-alert" in uit
+
+
+@pytest.mark.parametrize("export, waarschuwing", [(0.30, False), (0.35, False), (0.40, True)])
+def test_dashboard_waarschuwt_export_boven_pauze(export, waarschuwing):
+    db = {
+        "input_number.bevcc_boost_export_onder": S(export),
+        "input_number.bevcc_pauze_boven": S(0.35),
+        "input_number.bevcc_energiebelasting": S(0.11085),
+        "input_number.bevcc_leverkosten": S(0.02),
+        "sensor.bevcc_afnameprijs": S(0.39088, {"kaal": 0.2149}),
+    }
+    kop = ha.render(ha.load_yaml(ha.DASHBOARD)["cards"][0]["content"], db)
+    assert ("gaat de pauze voor" in kop) is waarschuwing
+    if export == 0.40:
+        assert "€ 0,40** (≈ 222 €/MWh kaal)" in kop

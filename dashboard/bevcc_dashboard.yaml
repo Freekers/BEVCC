@@ -26,7 +26,7 @@ cards:
       ## {{ ('€ %.3f' | format(p | float) | replace('.', ',')) if is_number(p) else 'prijs onbekend' }} /kWh · {{ states('input_select.bevcc_status') }}
       Bron: **{{ states('sensor.bevcc_prijsbron') }}**{% if is_number(kaal) %} (kaal € {{ '%.3f' | format(kaal | float) | replace('.', ',') }}){% endif %}
       {% if is_number(balans) %} · Balans kwartierprijs € {{ '%.3f' | format(balans | float) | replace('.', ',') }}{% endif %}
-      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}{% if exp > -0.5 and is_number(ep) %} · exportprijs € {{ '%.3f' | format(ep | float) | replace('.', ',') }} kaal ({{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% endif %}
+      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}{% if exp > -0.5 and is_number(ep) %} · exportprijs € {{ '%.3f' | format(ep | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% endif %}
 
       Pauze boven **€ {{ '%.2f' | format(cap) | replace('.', ',') }}** (≈ {{ ((cap - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal), alleen terwijl de auto laadt ·
       {% if boost <= -0.5 %}boost staat **uit** (Boost onder op het minimum).
@@ -36,9 +36,10 @@ cards:
       Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if bij != 'aFRR + onbalans' %} als de {{ bronnen }} eindigt,{% endif %} als het net onder {{ door_import }} kW zakt
       of als de thuisaccu onder {{ vloer - 2 }} % komt{% if regelen %} of 2 min lang meer dan 1 kW ontlaadt{% endif %}.{% endif %}
 
-      {% if exp > -0.5 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** kaal (≈ {{ (exp * 1000) | round(0) | int }} €/MWh) of minder
+      {% if exp > -0.5 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** (≈ {{ ((exp - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal) of minder
       (direct bij een aFRR-exportsessie, anders na 90 s){% if negeer %}, ook onder de accu-ondergrens{% else %} en de thuisaccu is ≥ {{ vloer }} %{% endif %}.
-      Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan 0,2 kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.
+      Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan 0,2 kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.{% if exp > cap %}
+      Let op: boven *Pauze boven* (€ {{ '%.2f' | format(cap) | replace('.', ',') }}) gaat de pauze voor, als de auto laadt.{% endif %}
       {% else %}Boost bij export staat **uit**.{% endif %}
       {% if regelen %}Laadstroom geregeld: bij een boost op import krijgt de auto niet meer dan er naar de thuisaccu gaat, bij export niet meer dan er wordt teruggeleverd (op hele ampère).{% endif %}
 
@@ -216,7 +217,7 @@ cards:
             style: buttons
       - type: tile
         entity: input_number.bevcc_boost_export_onder
-        name: Boost bij export onder (kaal)
+        name: Boost bij export onder
         features:
           - type: numeric-input
             style: buttons
@@ -248,9 +249,9 @@ cards:
       - entity: input_number.bevcc_boost_onder
         name: Boost onder
       - entity: sensor.bevcc_exportprijs
-        name: Exportprijs kaal
+        name: Exportprijs all-in
       - entity: input_number.bevcc_boost_export_onder
-        name: Boost bij export onder (kaal)
+        name: Boost bij export onder
   - type: history-graph
     title: Vermogen (12 u)
     hours_to_show: 12
@@ -319,7 +320,7 @@ cards:
       - entity: sensor.bevcc_balans_exportprijs
         name: Balans exportprijs (kaal)
       - entity: sensor.bevcc_exportprijs
-        name: Exportprijs (kaal, live)
+        name: Exportprijs all-in (live)
       - type: section
         label: Laadstroom
       - entity: sensor.bevcc_laadstroom_doel

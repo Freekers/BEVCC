@@ -305,32 +305,47 @@ EXPORT = ha.find("sensor", "BEVCC exportprijs")
 
 
 def exportprijs(sessie="off", afnemen=None, invoeden=None, balans=None, dyn_export="off", tennet_state=None):
+    """(all-in staat, attribuut kaal, attribuut bron) van sensor.bevcc_exportprijs."""
     attrs = {k: v for k, v in (("afnemen", afnemen), ("invoeden", invoeden)) if v is not None}
     db = {
         "binary_sensor.bevcc_afrr_exportsessie": S(sessie),
         "binary_sensor.bevcc_dynamische_export": S(dyn_export),
         "sensor.bevcc_tennet_onbalans": S(tennet_state or (afnemen if afnemen is not None else "unavailable"), attrs),
         "sensor.bevcc_balans_exportprijs": S("unavailable" if balans is None else balans),
+        "input_number.bevcc_energiebelasting": S(0.11085),
+        "input_number.bevcc_leverkosten": S(0.02),
     }
     bron = ha.render(EXPORT["attributes"]["bron"], db)
     if not ha.truthy(ha.render(EXPORT["availability"], db)):
-        return "unavailable", bron
-    return ha.render(EXPORT["state"], db), bron
+        return "unavailable", None, bron
+    staat = float(ha.render(EXPORT["state"], db))
+    kaal = ha.native(ha.render(EXPORT["attributes"]["kaal"], db))
+    return staat, kaal, bron
+
+
+def allin(kaal):
+    return pytest.approx(kaal * 1.21 + VAST, abs=1e-5)
 
 
 def test_exportprijs():
     # aFRR-exportsessie = opregelen: TenneT 'Afnemen'
-    assert exportprijs("on", afnemen=254.0, invoeden=150.0, balans=0.24) == ("0.254", "aFRR-export (TenneT afnemen)")
+    assert exportprijs("on", afnemen=254.0, invoeden=150.0, balans=0.24) == (allin(0.254), 0.254, "aFRR-export (TenneT afnemen)")
     # andere teruglevering: TenneT 'Invoeden'
-    assert exportprijs(afnemen=254.0, invoeden=150.0, balans=0.24) == ("0.15", "onbalans (TenneT invoeden)")
-    assert exportprijs(afnemen=254.0, invoeden=-12.5) == ("-0.0125", "onbalans (TenneT invoeden)")
+    assert exportprijs(afnemen=254.0, invoeden=150.0, balans=0.24) == (allin(0.15), 0.15, "onbalans (TenneT invoeden)")
+    assert exportprijs(afnemen=254.0, invoeden=-12.5) == (allin(-0.0125), -0.0125, "onbalans (TenneT invoeden)")
     # TenneT weg: de exportprijs van Balans
-    assert exportprijs("on", balans=0.27) == ("0.27", "aFRR-export (Balans)")
-    assert exportprijs(balans=0.08) == ("0.08", "Balans kwartierprijs export")
-    assert exportprijs(afnemen=254.0, invoeden=150.0, tennet_state="unavailable", balans=0.08)[0] == "0.08"
+    assert exportprijs("on", balans=0.27) == (allin(0.27), 0.27, "aFRR-export (Balans)")
+    assert exportprijs(balans=0.08) == (allin(0.08), 0.08, "Balans kwartierprijs export")
+    assert exportprijs(afnemen=254.0, invoeden=150.0, tennet_state="unavailable", balans=0.08)[:2] == (allin(0.08), 0.08)
     # niets bekend, of een dynamisch exportplan (prijs niet in de API)
-    assert exportprijs() == ("unavailable", "onbekend")
-    assert exportprijs(afnemen=254.0, invoeden=150.0, dyn_export="on") == ("unavailable", "dynamische export (prijs onbekend)")
+    assert exportprijs() == ("unavailable", None, "onbekend")
+    assert exportprijs(afnemen=254.0, invoeden=150.0, dyn_export="on") == ("unavailable", None, "dynamische export (prijs onbekend)")
+
+
+def test_exportprijs_zelfde_formule_als_afnameprijs():
+    # 0,40 all-in = (0,40 - 0,02 - 0,11085) / 1,21 = 0,2224 kaal, ook voor export
+    assert exportprijs(invoeden=222.44, afnemen=222.44)[0] == pytest.approx(0.40, abs=1e-4)
+    assert combo(afnemen=222.44, invoeden=222.44)[0] == "0.4"
 
 
 # --- Versiecontrole ----------------------------------------------------------
