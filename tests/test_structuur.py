@@ -114,10 +114,19 @@ def _markdown_kaarten(node):
             yield from _markdown_kaarten(v)
 
 
-@pytest.mark.parametrize("boost_bij, grens", [("alleen aFRR", 0.20), ("aFRR + dynamisch", 0.20), ("aFRR + onbalans", 0.20),
-                                             ("alleen aFRR", -0.5)])
-def test_dashboard_templates_renderen(boost_bij, grens):
+@pytest.mark.parametrize("boost_bij, grens, export, aan", [
+    ("alleen aFRR", 0.20, -0.5, "off"), ("aFRR + dynamisch", 0.20, -0.5, "off"), ("aFRR + onbalans", 0.20, -0.5, "off"),
+    ("alleen aFRR", -0.5, -0.5, "off"), ("alleen aFRR", 0.20, 0.12, "on"), ("alleen aFRR", 0.20, 0.12, "off"),
+])
+def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
     db = {
+        "input_number.bevcc_boost_export_onder": S(export),
+        "input_boolean.bevcc_boost_export_negeer_ondergrens": S(aan),
+        "input_boolean.bevcc_laadstroom_regelen": S(aan),
+        "sensor.bevcc_exportprijs": S(0.1, {"bron": "onbalans (TenneT invoeden)"}),
+        "select.bevcc_evcc_max_laadstroom": S(9),
+        "input_text.bevcc_ingestelde_stroom": S("9"),
+        "sensor.bevcc_doel": S("boost", {"reden": "export"}),
         "sensor.bevcc_afnameprijs": S(0.39088, {"kaal": 0.2149}),
         "sensor.bevcc_balans_kwartierprijs": S(0.4),
         "sensor.bevcc_prijsbron": S("onbalans (TenneT afnemen)"),

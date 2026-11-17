@@ -19,10 +19,14 @@ cards:
       {% set door_import = '%g' | format([min_kw - 1, 0] | max) | replace('.', ',') %}
       {% set bij = states('input_select.bevcc_boost_bij') %}
       {% set bronnen = {'aFRR + dynamisch': 'aFRR-sessie of dynamische import'}.get(bij, 'aFRR-sessie') %}
+      {% set exp = states('input_number.bevcc_boost_export_onder') | float(-0.5) %}
+      {% set ep = states('sensor.bevcc_exportprijs') %}
+      {% set negeer = is_state('input_boolean.bevcc_boost_export_negeer_ondergrens', 'on') %}
+      {% set regelen = is_state('input_boolean.bevcc_laadstroom_regelen', 'on') %}
       ## {{ ('€ %.3f' | format(p | float) | replace('.', ',')) if is_number(p) else 'prijs onbekend' }} /kWh · {{ states('input_select.bevcc_status') }}
       Bron: **{{ states('sensor.bevcc_prijsbron') }}**{% if is_number(kaal) %} (kaal € {{ '%.3f' | format(kaal | float) | replace('.', ',') }}){% endif %}
       {% if is_number(balans) %} · Balans kwartierprijs € {{ '%.3f' | format(balans | float) | replace('.', ',') }}{% endif %}
-      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}
+      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}{% if exp > -0.5 and is_number(ep) %} · exportprijs € {{ '%.3f' | format(ep | float) | replace('.', ',') }} kaal ({{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% endif %}
 
       Pauze boven **€ {{ '%.2f' | format(cap) | replace('.', ',') }}** (≈ {{ ((cap - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal), alleen terwijl de auto laadt ·
       {% if boost <= -0.5 %}boost staat **uit** (Boost onder op het minimum).
@@ -30,7 +34,13 @@ cards:
       {% if bij == 'aFRR + onbalans' %}als het EMS ≥ {{ min_import }} kW importeert (direct bij een aFRR-sessie of dynamische import, anders na 90 s){% else %}tijdens een {{ bronnen }} van ≥ {{ min_import }} kW{% endif %}
       en de thuisaccu ≥ {{ vloer }} % is.
       Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if bij != 'aFRR + onbalans' %} als de {{ bronnen }} eindigt,{% endif %} als het net onder {{ door_import }} kW zakt
-      of als de thuisaccu onder {{ vloer - 2 }} % komt.{% endif %}
+      of als de thuisaccu onder {{ vloer - 2 }} % komt{% if regelen %} of 2 min lang meer dan 1 kW ontlaadt{% endif %}.{% endif %}
+
+      {% if exp > -0.5 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** kaal (≈ {{ (exp * 1000) | round(0) | int }} €/MWh) of minder
+      (direct bij een aFRR-exportsessie, anders na 90 s){% if negeer %}, ook onder de accu-ondergrens{% else %} en de thuisaccu is ≥ {{ vloer }} %{% endif %}.
+      Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan {{ door_import }} kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.
+      {% else %}Boost bij export staat **uit**.{% endif %}
+      {% if regelen %}Laadstroom geregeld: bij een boost op import krijgt de auto niet meer dan er naar de thuisaccu gaat, bij export niet meer dan er wordt teruggeleverd (op hele ampère).{% endif %}
 
   # --- Meldingen ---
   - type: conditional
@@ -59,7 +69,31 @@ cards:
     card:
       type: markdown
       content: |
-        <ha-alert alert-type="success">Boost: goedkope EMS-import, laden op vol vermogen. Daarna terug naar <b>smart</b>.</ha-alert>
+        {% set stroom = states('select.bevcc_evcc_max_laadstroom') %}
+        {% set geregeld = is_state('input_boolean.bevcc_laadstroom_regelen', 'on') and is_number(stroom)
+                          and states('input_text.bevcc_ingestelde_stroom') != 'handmatig' %}
+        <ha-alert alert-type="success">Boost: {{ 'goedkope teruglevering' if state_attr('sensor.bevcc_doel', 'reden') == 'export' else 'goedkope EMS-import' }}, laden op {% if geregeld %}maximaal <b>{{ stroom }} A</b> (geregeld){% else %}vol vermogen{% endif %}. Daarna terug naar <b>smart</b>.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_boolean.bevcc_laadstroom_regelen
+        state: "on"
+      - condition: state
+        entity: select.bevcc_evcc_max_laadstroom
+        state: unavailable
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="warning">Laadstroom regelen staat aan, maar <b>select.{{ states('input_text.bevcc_evcc_prefix') }}_{{ states('input_text.bevcc_evcc_laadpunt') }}_max_current</b> bestaat niet of is onbereikbaar. Een boost laadt dan op vol vermogen.</ha-alert>
+  - type: conditional
+    conditions:
+      - condition: state
+        entity: input_text.bevcc_ingestelde_stroom
+        state: handmatig
+    card:
+      type: markdown
+      content: |
+        <ha-alert alert-type="info">Maximale laadstroom buiten BEVCC gewijzigd: BEVCC regelt de laadstroom niet meer tot de boost voorbij is.</ha-alert>
   - type: conditional
     conditions:
       - condition: state
@@ -170,7 +204,7 @@ cards:
             style: buttons
       - type: tile
         entity: input_number.bevcc_boost_min_import
-        name: Boost min. EMS-import
+        name: Boost min. EMS-vermogen
         features:
           - type: numeric-input
             style: buttons
@@ -180,6 +214,23 @@ cards:
         features:
           - type: numeric-input
             style: buttons
+      - type: tile
+        entity: input_number.bevcc_boost_export_onder
+        name: Boost bij export onder (kaal)
+        features:
+          - type: numeric-input
+            style: buttons
+      - type: tile
+        entity: input_boolean.bevcc_boost_export_negeer_ondergrens
+        name: Export negeert accu-ondergrens
+        color: orange
+      - type: tile
+        entity: input_boolean.bevcc_laadstroom_regelen
+        name: Laadstroom regelen
+        color: green
+      - type: tile
+        entity: select.bevcc_evcc_max_laadstroom
+        name: EVCC max. laadstroom
 
   # --- Geschiedenis ---
   - type: history-graph
@@ -196,6 +247,10 @@ cards:
         name: Pauze boven
       - entity: input_number.bevcc_boost_onder
         name: Boost onder
+      - entity: sensor.bevcc_exportprijs
+        name: Exportprijs kaal
+      - entity: input_number.bevcc_boost_export_onder
+        name: Boost bij export onder (kaal)
   - type: history-graph
     title: Vermogen (12 u)
     hours_to_show: 12
@@ -206,6 +261,8 @@ cards:
         name: Thuisaccu
       - entity: sensor.bevcc_laadvermogen
         name: Auto
+      - entity: sensor.bevcc_laadstroom_doel
+        name: Laadstroom doel (A)
   - type: history-graph
     title: Status (12 u)
     hours_to_show: 12
@@ -220,6 +277,10 @@ cards:
         name: Prijspiek
       - entity: binary_sensor.bevcc_goedkope_import
         name: Goedkope import
+      - entity: binary_sensor.bevcc_goedkope_export
+        name: Goedkope export
+      - entity: select.bevcc_evcc_max_laadstroom
+        name: EVCC max. laadstroom
       - entity: binary_sensor.bevcc_auto_laadt
         name: Laden
 
@@ -251,6 +312,26 @@ cards:
         name: Balans dynamische prijs (kaal)
       - entity: sensor.bevcc_tennet_onbalans
         name: TenneT afnemen (kaal, €/MWh)
+      - entity: binary_sensor.bevcc_afrr_exportsessie
+        name: aFRR-exportsessie (Balans)
+      - entity: binary_sensor.bevcc_dynamische_export
+        name: Dynamische export (Balans)
+      - entity: sensor.bevcc_balans_exportprijs
+        name: Balans exportprijs (kaal)
+      - entity: sensor.bevcc_exportprijs
+        name: Exportprijs (kaal, live)
+      - type: section
+        label: Laadstroom
+      - entity: sensor.bevcc_laadstroom_doel
+        name: Doel tijdens boost
+      - entity: input_text.bevcc_te_herstellen_stroom
+        name: Te herstellen max. laadstroom
+      - entity: input_text.bevcc_ingestelde_stroom
+        name: Door BEVCC ingesteld
+      - entity: sensor.bevcc_min_laadstroom
+        name: Minimale laadstroom (EVCC)
+      - entity: sensor.bevcc_laadfasen
+        name: Fasen
       - type: section
         label: Tarieven (jaarlijks controleren)
       - entity: input_number.bevcc_energiebelasting

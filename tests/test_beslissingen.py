@@ -36,7 +36,23 @@ def base(**kw):
         "binary_sensor.bevcc_afrr_importsessie": S(kw.get("sessie", "off")),
         "binary_sensor.bevcc_ems_import": S(kw.get("ems", "off")),
         "sensor.bevcc_balans_dynamisch_prijs": S(kw.get("dyn", "unavailable")),
+        # export
+        "binary_sensor.bevcc_afrr_exportsessie": S(kw.get("exportsessie", "off")),
+        "binary_sensor.bevcc_ems_export": S(kw.get("ems_export", "off")),
+        "sensor.bevcc_exportprijs": S(kw.get("exportprijs", "unavailable")),
+        "input_number.bevcc_boost_export_onder": S(kw.get("export_grens", -0.5)),
+        "input_boolean.bevcc_boost_export_negeer_ondergrens": S(kw.get("negeer", "off")),
+        # laadstroomregeling
+        "input_boolean.bevcc_laadstroom_regelen": S(kw.get("regelen", "off")),
+        f"select.{lp}_min_current": S(kw.get("min_stroom", 6)),
+        f"sensor.{lp}_phases_active": S(kw.get("fasen_actief", 3)),
+        f"select.{lp}_phases": S(kw.get("fasen_ingesteld", 0)),
+        "input_text.bevcc_te_herstellen_stroom": S(kw.get("bewaard_stroom", "")),
+        "input_text.bevcc_ingestelde_stroom": S(kw.get("ingesteld_stroom", ""), age_min=kw.get("ingesteld_leeftijd", 10)),
     }
+    if kw.get("max_stroom", 16) is not None:
+        db[f"select.{lp}_max_current"] = S(kw.get("max_stroom", 16), {"options": [str(i) for i in range(6, 65)]},
+                                           age_min=kw.get("stroom_leeftijd", 10))
     # Boostprijs uit de afnameprijs en de dynamische prijs (sectie 3).
     db["sensor.bevcc_boostprijs"] = S(ha.render(ha.find("sensor", "BEVCC boostprijs")["state"], db))
     # Sectie 2: de koppeling rendert de bevcc-entiteiten uit de EVCC-entiteiten.
@@ -47,13 +63,22 @@ def base(**kw):
         ("sensor", "BEVCC thuisaccu SoC", "sensor.bevcc_thuisaccu_soc"),
         ("binary_sensor", "BEVCC auto aangesloten", "binary_sensor.bevcc_auto_aangesloten"),
         ("binary_sensor", "BEVCC auto laadt", "binary_sensor.bevcc_auto_laadt"),
+        ("sensor", "BEVCC min. laadstroom", "sensor.bevcc_min_laadstroom"),
+        ("sensor", "BEVCC laadfasen", "sensor.bevcc_laadfasen"),
     ]:
         item = ha.find(section, name)
-        if not ha.truthy(ha.render(item["availability"], db)):
+        if "availability" in item and not ha.truthy(ha.render(item["availability"], db)):
             db[eid] = S("unavailable")
         else:
             state = ha.render(item["state"], db)
             db[eid] = S(("on" if ha.truthy(state) else "off") if section == "binary_sensor" else state)
+    stroom = ha.find("select", "BEVCC EVCC max. laadstroom")
+    if ha.truthy(ha.render(stroom["availability"], db)):
+        db["select.bevcc_evcc_max_laadstroom"] = S(ha.render(stroom["state"], db),
+                                                   {"options": ha.native(ha.render(stroom["options"], db))},
+                                                   age_min=kw.get("stroom_leeftijd", 10))
+    else:
+        db["select.bevcc_evcc_max_laadstroom"] = S("unavailable")
     sel = ha.find("select", "BEVCC EVCC-modus")
     src = db.get(f"select.{lp}_mode")
     if ha.truthy(ha.render(sel["availability"], db)):
@@ -200,12 +225,189 @@ def test_prijspiek_met_hysterese():
     assert not bs("BEVCC prijspiek", base(kaal=150), "on")     # 0,312 < 0,33
 
 
+# --- Laadstroom: koppeling -----------------------------------------------------
+
+def test_koppeling_max_laadstroom():
+    db = base(max_stroom=16)
+    assert db["select.bevcc_evcc_max_laadstroom"].state == "16"
+    assert db["select.bevcc_evcc_max_laadstroom"].attributes["options"][0] == "6"
+    action = ha.find("select", "BEVCC EVCC max. laadstroom")["select_option"][0]
+    assert ha.render(action["target"]["entity_id"], db) == "select.evcc_alfen_max_current"
+    assert base(max_stroom=None)["select.bevcc_evcc_max_laadstroom"].state == "unavailable"
+
+
+@pytest.mark.parametrize("actief, ingesteld, verwacht", [
+    (3, 0, "3"), (1, 0, "1"), (2, 3, "2"),
+    (0, 1, "1"),            # laadt niet: ingestelde fasen
+    (0, 0, "3"),            # automatisch: 3
+    ("unavailable", 3, "3"),
+])
+def test_koppeling_laadfasen(actief, ingesteld, verwacht):
+    assert base(fasen_actief=actief, fasen_ingesteld=ingesteld)["sensor.bevcc_laadfasen"].state == verwacht
+
+
+def test_koppeling_min_laadstroom():
+    assert base(min_stroom=6)["sensor.bevcc_min_laadstroom"].state == "6.0"
+    assert base(min_stroom="unavailable")["sensor.bevcc_min_laadstroom"].state == "unavailable"
+
+
+# --- Boost bij export ----------------------------------------------------------
+
+GE = "BEVCC goedkope export"
+# EMS levert 8 kW terug uit de thuisaccu (huis 0,4 kW), exportprijs 0,10 kaal, grens 0,12
+EXPORT = dict(net=-8000, accu=8400, exportprijs=0.10, export_grens=0.12)
+
+
+def test_ems_export():
+    assert bs("BEVCC EMS-export", base(net=-8000, accu=8400))
+    assert not bs("BEVCC EMS-export", base(net=-3000, accu=-200))   # zonne-energie, accu laadt
+    assert not bs("BEVCC EMS-export", base(net=-1500, accu=1900))   # minder dan 2 kW
+
+
+@pytest.mark.parametrize("kw, this, leeftijd, verwacht", [
+    (dict(EXPORT, exportsessie="on"), "off", 60, True),              # aFRR-exportsessie: direct
+    (dict(EXPORT), "off", 60, False),                                # geen sessie, < 90 s
+    (dict(EXPORT, ems_export="on"), "off", 60, True),                # teruglevering >= 90 s
+    (dict(EXPORT, exportsessie="on", export_grens=-0.5), "off", 60, False),  # uit
+    (dict(EXPORT, exportsessie="on", exportprijs=0.13), "off", 60, False),
+    (dict(EXPORT, exportsessie="on", exportprijs=0.12), "off", 60, True),    # op de grens
+    (dict(EXPORT, exportsessie="on", exportprijs="unavailable"), "off", 60, False),
+    (dict(EXPORT, exportsessie="on", soc=40), "off", 60, False),    # onder de ondergrens
+    (dict(EXPORT, exportsessie="on", soc=40, negeer="on"), "off", 60, True),
+    (dict(EXPORT, exportsessie="on", soc="unavailable", negeer="on"), "off", 60, True),
+    (dict(EXPORT, exportsessie="on", accu=300), "off", 60, False),  # niet uit de thuisaccu
+    (dict(EXPORT, exportsessie="on", net=-1500, accu=1900), "off", 60, False),  # < 2 kW
+    (dict(EXPORT, exportsessie="on"), "off", 4, False),             # 5 min rust
+    # doorgaan. EMS houdt de teruglevering vast, auto 10 kW uit de thuisaccu:
+    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.13, export_grens=0.12), "on", 60, True),
+    (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.15, export_grens=0.12), "on", 60, False),
+    # auto neemt de teruglevering over: net -0,5 kW, grens 2 - 1 = 1 kW -> stoppen
+    (dict(net=-500, accu=8400, auto_kw=7.5, exportprijs=0.10, export_grens=0.12), "on", 60, False),
+    (dict(net=-500, accu=8400, auto_kw=7.5, exportprijs=0.10, export_grens=0.12, min_import=0.5), "on", 60, True),
+    (dict(net=200, accu=8400, auto_kw=8.2, exportprijs=0.10, export_grens=0.12, min_import=0.5), "on", 60, False),
+    (dict(EXPORT, soc=48.5), "on", 60, True),
+    (dict(EXPORT, soc=47), "on", 60, False),
+    (dict(EXPORT, soc=10, negeer="on"), "on", 60, True),
+    (dict(EXPORT, export_grens=-0.5), "on", 60, False),             # uitgezet tijdens de boost
+])
+def test_goedkope_export(kw, this, leeftijd, verwacht):
+    assert bs(GE, base(**kw), this, leeftijd) is verwacht
+
+
+# --- Boost bij import met laadstroomregeling -----------------------------------
+
+@pytest.mark.parametrize("kw, this, verwacht", [
+    # import 12,5 kW: de thuisaccu krijgt 11,3 kW, ruim boven 6 A x 3 x 230 V
+    (dict(IMPORT, sessie="on", regelen="on"), "off", True),
+    # import 5 kW, huis 1,5 kW: 3,5 kW naar de thuisaccu < 4,14 kW minimaal laden
+    (dict(net=5000, accu=-3500, kaal=52.8, sessie="on"), "off", True),
+    (dict(net=5000, accu=-3500, kaal=52.8, sessie="on", regelen="on"), "off", False),
+    (dict(net=5000, accu=-3500, kaal=52.8, sessie="on", regelen="on", fasen_actief=1), "off", True),
+    (dict(net=5000, accu=-4500, kaal=52.8, sessie="on", regelen="on"), "off", True),
+    # geen regelbaar laadpunt of handmatig overgenomen: geen extra voorwaarde
+    (dict(net=5000, accu=-3500, kaal=52.8, sessie="on", regelen="on", max_stroom=None), "off", True),
+    (dict(net=5000, accu=-3500, kaal=52.8, sessie="on", regelen="on", ingesteld_stroom="handmatig"), "off", True),
+    # doorgaan: thuisaccu ontlaadt meer dan 1 kW -> stoppen (na 2 min)
+    (dict(net=5000, accu=1500, auto_kw=6.5, kaal=52.8, sessie="on", regelen="on"), "on", False),
+    (dict(net=5000, accu=800, auto_kw=5.8, kaal=52.8, sessie="on", regelen="on"), "on", True),
+    (dict(net=5000, accu=-300, auto_kw=4.2, kaal=52.8, sessie="on", regelen="on"), "on", True),
+    (dict(net=5000, accu=5500, auto_kw=10, kaal=52.8, sessie="on"), "on", True),   # zonder regeling: door
+])
+def test_goedkope_import_met_regeling(kw, this, verwacht):
+    assert bs(GI, base(**kw), this) is verwacht
+
+
+# --- Laadstroom: doel ----------------------------------------------------------
+
+STROOM = ha.find("sensor", "BEVCC laadstroom doel")
+
+
+def stroomdoel(goedkoop_import="on", goedkoop_export="off", **kw):
+    kw.setdefault("status", "boost")
+    kw.setdefault("regelen", "on")
+    db = base(**kw)
+    db["binary_sensor.bevcc_goedkope_import"] = S(goedkoop_import)
+    db["binary_sensor.bevcc_goedkope_export"] = S(goedkoop_export)
+    if not ha.truthy(ha.render(STROOM["availability"], db)):
+        return "unavailable"
+    return ha.render(STROOM["state"], db)
+
+
+@pytest.mark.parametrize("kw, verwacht", [
+    # import 5 kW, huis 0,5 kW, auto nog niet aan: 4,2 kW / 690 W per A -> 6 A
+    (dict(net=5000, accu=-4500), "6"),
+    (dict(net=5000, accu=-360, auto_kw=4.14), "6"),           # auto op 6 A: stabiel
+    (dict(net=5000, accu=-2000, auto_kw=4.14), "8"),          # meer import: omhoog
+    (dict(net=12500, accu=-11300), "15"),
+    (dict(net=20000, accu=-19000), "16"),                     # niet boven de oorspronkelijke 16 A
+    (dict(net=5000, accu=3000, auto_kw=4.14), "6"),           # niet onder de minimale stroom
+    (dict(net=5000, accu=-2000, fasen_actief=1), "7"),        # 1 fase: 230 W per A
+    # tijdens de regeling: de bewaarde oorspronkelijke stroom is het maximum
+    (dict(net=20000, accu=-19000, max_stroom=9, bewaard_stroom="16"), "16"),
+    (dict(net=20000, accu=-19000, max_stroom=9, bewaard_stroom="32"), "26"),   # omhoog: 300 W extra marge
+    # hysterese: op 11 A laadt de thuisaccu 0,89 kW -> blijft 11 A (omhoog pas vanaf 1,29 kW)
+    (dict(net=9000, accu=-890, auto_kw=7.59, max_stroom=11, bewaard_stroom="16"), "11"),
+    (dict(net=9000, accu=-1300, auto_kw=7.59, max_stroom=11, bewaard_stroom="16"), "12"),
+    (dict(net=9000, accu=-250, auto_kw=7.59, max_stroom=11, bewaard_stroom="16"), "10"),  # omlaag: direct
+    (dict(net=5000, accu=-4500, min_stroom=8), "8"),
+    # geen boost, regeling uit of geen meting: geen doel
+    (dict(net=5000, accu=-4500, status="rust"), "None"),
+    (dict(net=5000, accu=-4500, regelen="off"), "None"),
+    (dict(net=5000, accu="unavailable"), "None"),
+    (dict(net=5000, accu=-4500, max_stroom=None), "unavailable"),
+    (dict(net=5000, accu=-4500, max_stroom=None, bewaard_stroom="16"), "6"),
+])
+def test_laadstroom_doel_import(kw, verwacht):
+    assert stroomdoel(**kw) == verwacht
+
+
+@pytest.mark.parametrize("kw, verwacht", [
+    # teruglevering 8 kW, grens 2 - 1 = 1 kW, marge 0,3 kW: 6,7 kW -> 9 A
+    (dict(net=-8000, accu=8400), "9"),
+    # EMS houdt de teruglevering vast: de auto mag alles
+    (dict(net=-8000, accu=18400, auto_kw=10), "16"),
+    # auto nam de teruglevering over: niet verder omhoog, net blijft op -1,3 kW
+    (dict(net=-1300, accu=8400, auto_kw=6.7), "9"),
+    (dict(net=-500, accu=8400, auto_kw=7.5), "9"),
+])
+def test_laadstroom_doel_export(kw, verwacht):
+    assert stroomdoel(goedkoop_import="off", goedkoop_export="on", **kw) == verwacht
+
+
+def test_laadstroom_doel_attributen():
+    db = base(status="boost", regelen="on", fasen_actief=1, bewaard_stroom="16", max_stroom=9)
+    db["binary_sensor.bevcc_goedkope_import"] = S("off")
+    db["binary_sensor.bevcc_goedkope_export"] = S("on")
+    attrs = STROOM["attributes"]
+    assert ha.render(attrs["reden"], db) == "export"
+    assert ha.render(attrs["fasen"], db) == "1"
+    assert ha.render(attrs["oorspronkelijk"], db) == "16"
+
+
 # --- Doel ----------------------------------------------------------------------
 
-def doel(db, piek="off", goedkoop="off", piek_leeftijd=60):
+def doel(db, piek="off", goedkoop="off", piek_leeftijd=60, export="off"):
     db["binary_sensor.bevcc_prijspiek"] = S(piek, age_min=piek_leeftijd)
     db["binary_sensor.bevcc_goedkope_import"] = S(goedkoop)
+    db["binary_sensor.bevcc_goedkope_export"] = S(export)
     return ha.render(ha.find("sensor", "BEVCC doel")["state"], db)
+
+
+@pytest.mark.parametrize("args, verwacht, reden", [
+    (dict(export="on"), "boost", "export"),
+    (dict(goedkoop="on"), "boost", "import"),
+    (dict(goedkoop="on", export="on"), "boost", "import"),
+    (dict(piek="on", export="on"), "boost", "export"),        # auto laadt niet: geen pauze
+    (dict(), "geen", ""),
+])
+def test_doel_export(args, verwacht, reden):
+    db = base()
+    assert doel(db, **args) == verwacht
+    assert ha.render(ha.find("sensor", "BEVCC doel")["attributes"]["reden"], db) == reden
+
+
+def test_doel_piek_gaat_voor_export():
+    assert doel(base(laadt="on"), piek="on", export="on") == "pauze"
 
 
 @pytest.mark.parametrize("kw, args, verwacht", [
@@ -300,3 +502,96 @@ def test_snel_optie(opties, verwacht):
 
 def test_boost_verwacht_now():
     assert variabelen(base(status="boost"))["verwacht"] == "now"
+
+
+def test_boost_logboek_noemt_reden():
+    db = base(status="rust")
+    db["sensor.bevcc_doel"] = S("boost", {"reden": "export"})
+    db["sensor.bevcc_exportprijs"] = S(0.1, {"bron": "onbalans (TenneT invoeden)"})
+    v = variabelen(db)
+    assert v["reden"] == "export"
+    tekst = TAKKEN[NAMEN.index("E boost")]["sequence"][-1]["data"]["message"]
+    uit = ha.render(tekst, db, **v)
+    assert "goedkope teruglevering" in uit and "onbalans (TenneT invoeden)" in uit
+    db["sensor.bevcc_doel"] = S("boost", {"reden": "import"})
+    assert "goedkope EMS-import" in ha.render(tekst, db, **variabelen(db))
+
+
+# --- Laadstroomregeling (automatisering) ---------------------------------------
+
+REGELING = ha.automation("bevcc_laadstroomregeling")
+R_VARS = REGELING["actions"][0]["variables"]
+R_TAKKEN = REGELING["actions"][1]["choose"]
+R_NAMEN = ["A handmatig", "B regelen", "C terugzetten", "D opruimen"]
+
+
+def regeltak(db, doel_a):
+    db["sensor.bevcc_laadstroom_doel"] = S(doel_a, {"reden": "import", "fasen": 3, "oorspronkelijk": 16})
+    v = {}
+    for k, t in R_VARS.items():
+        v[k] = ha.native(ha.render(t, db, **v))
+    for naam, br in zip(R_NAMEN, R_TAKKEN, strict=True):
+        if all(ha.truthy(ha.render(c, db, **v)) for c in br["conditions"]):
+            return naam, v
+    return None, v
+
+
+def test_regeling_aantal_takken():
+    assert len(R_TAKKEN) == len(R_NAMEN)
+
+
+@pytest.mark.parametrize("kw, doel_a, verwacht", [
+    (dict(status="boost", regelen="on"), 6, "B regelen"),                  # eerste aanpassing
+    (dict(status="boost", regelen="on"), 16, None),                        # al goed
+    (dict(status="boost", regelen="on", max_stroom=6, bewaard_stroom="16", ingesteld_stroom="6"), 8, "B regelen"),
+    (dict(status="boost", regelen="off"), 6, None),
+    (dict(status="rust", regelen="on"), "unknown", None),
+    # iemand anders zette 12 A terwijl BEVCC 6 A zette (meer dan 1 min geleden)
+    (dict(status="boost", regelen="on", max_stroom=12, bewaard_stroom="16", ingesteld_stroom="6"), 6, "A handmatig"),
+    # BEVCC zette net 6 A, EVCC heeft het nog niet overgenomen: nog geen conclusie
+    (dict(status="boost", regelen="on", max_stroom=16, bewaard_stroom="16", ingesteld_stroom="6",
+          ingesteld_leeftijd=0.3), 6, "B regelen"),
+    (dict(status="boost", regelen="on", ingesteld_stroom="handmatig"), 6, None),   # opzij tot het einde
+    (dict(status="boost", regelen="on", max_stroom=None), 6, None),                # EVCC weg
+    # boost voorbij of regeling uit: terugzetten
+    (dict(status="rust", max_stroom=6, bewaard_stroom="16", ingesteld_stroom="6"), "unknown", "C terugzetten"),
+    (dict(status="pauze", max_stroom=6, bewaard_stroom="16", ingesteld_stroom="6"), "unknown", "C terugzetten"),
+    (dict(status="boost", regelen="off", max_stroom=6, bewaard_stroom="16", ingesteld_stroom="6"), "unknown",
+     "C terugzetten"),
+    (dict(status="rust", max_stroom=None, bewaard_stroom="16", ingesteld_stroom="6"), "unknown", None),  # later
+    (dict(status="rust", ingesteld_stroom="handmatig"), "unknown", "D opruimen"),
+    (dict(status="rust"), "unknown", None),
+])
+def test_regeling_takken(kw, doel_a, verwacht):
+    assert regeltak(base(**kw), doel_a)[0] == verwacht
+
+
+def test_regeling_zet_hele_ampere():
+    db = base(status="boost", regelen="on")
+    naam, v = regeltak(db, 6)
+    stappen = R_TAKKEN[R_NAMEN.index(naam)]["sequence"]
+    bewaar = stappen[0]["then"][0]
+    assert bewaar["target"]["entity_id"] == "input_text.bevcc_te_herstellen_stroom"
+    assert ha.render(bewaar["data"]["value"], db, **v) == "16"
+    assert ha.render(stappen[0]["then"][1]["data"]["message"], db, **v).startswith("Laadstroom geregeld (import)")
+    assert ha.render(stappen[-1]["data"]["option"], db, **v) == "6"
+    assert stappen[-1]["target"]["entity_id"] == "select.bevcc_evcc_max_laadstroom"
+
+
+@pytest.mark.parametrize("kw, van_bevcc", [
+    (dict(status="rust", max_stroom=6, bewaard_stroom="16", ingesteld_stroom="6"), True),
+    # na de boost door iemand anders op 10 A gezet: laten staan
+    (dict(status="rust", max_stroom=10, bewaard_stroom="16", ingesteld_stroom="6"), False),
+])
+def test_regeling_terugzetten_alleen_eigen_waarde(kw, van_bevcc):
+    db = base(**kw)
+    naam, v = regeltak(db, "unknown")
+    assert naam == "C terugzetten"
+    stappen = R_TAKKEN[R_NAMEN.index(naam)]["sequence"]
+    v["van_bevcc"] = ha.native(ha.render(stappen[0]["variables"]["van_bevcc"], db, **v))
+    assert v["van_bevcc"] is van_bevcc
+    assert ha.truthy(ha.render(stappen[1]["if"][0]["value_template"], db, **v)) is van_bevcc
+    assert ha.render(stappen[1]["then"][0]["data"]["option"], db, **v) == "16"
+    log = ha.render(stappen[2]["then"][-1]["data"]["message"], db, **v)
+    assert log == ("Maximale laadstroom terug naar 16 A" if van_bevcc
+                   else "Maximale laadstroom niet teruggezet: staat op 10 A (handmatig gewijzigd)")

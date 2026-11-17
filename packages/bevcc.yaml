@@ -14,6 +14,13 @@
 #                            thuisaccu uit het net, de all-in prijs ligt onder
 #                            'Boost onder' en de thuisaccu zit op of boven de
 #                            ondergrens (alleen vanuit Smart)
+#                            of goedkope EMS-export: het EMS levert stroom uit
+#                            de thuisaccu terug voor een kale prijs op of onder
+#                            'Boost bij export onder' (standaard uit)
+#
+#   Laadstroom regelen (optioneel): tijdens een boost zet BEVCC de maximale
+#   laadstroom van EVCC zo, dat de auto niet meer neemt dan er naar de
+#   thuisaccu gaat (import), en daarna terug.
 #
 #   Een prijspiek gaat altijd voor een boost.
 #   BEVCC houdt geen rekening met vertrektijd of gewenste laadtoestand: een
@@ -31,6 +38,9 @@
 #   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans.
 # Voor een boost (sensor.bevcc_boostprijs) geldt in een kwartier met
 # dynamische (day-ahead) import zonder aFRR-sessie de dynamische prijs.
+# Voor een boost bij export (sensor.bevcc_exportprijs, kaal): tijdens een
+# aFRR-exportsessie de live onbalansprijs 'Afnemen' (opregelprijs), anders
+# 'Invoeden'.
 #
 # Installatie en uitleg: zie README.md. Kort:
 #   1. secrets.yaml:
@@ -67,6 +77,17 @@ input_text:
     name: "BEVCC te herstellen EVCC-modus"
     icon: mdi:backup-restore
     max: 16
+  # Laadstroomregeling: de maximale laadstroom van vóór de regeling (leeg =
+  # niets terug te zetten), en de laatste waarde die BEVCC zelf zette
+  # ('handmatig' = iemand anders wijzigde hem tijdens deze boost).
+  bevcc_te_herstellen_stroom:
+    name: "BEVCC te herstellen max. laadstroom"
+    icon: mdi:backup-restore
+    max: 16
+  bevcc_ingestelde_stroom:
+    name: "BEVCC ingestelde max. laadstroom"
+    icon: mdi:current-ac
+    max: 16
 
 # Geen 'initial': wijzigingen via het dashboard blijven bewaard, ook bij
 # updates. Standaardwaarden zet de automatisering 'BEVCC standaardwaarden'
@@ -89,12 +110,27 @@ input_number:
     step: 0.01
     mode: box
     icon: mdi:cash-fast
+  # Kale exportprijs (wat het EMS voor teruggeleverde stroom krijgt) waarop of
+  # waaronder BEVCC de auto laat laden van de thuisaccu in plaats van te
+  # verkopen. -0,50 (minimum, standaard) = uit.
+  bevcc_boost_export_onder:
+    name: "BEVCC boost bij export onder (kaal)"
+    unit_of_measurement: "EUR/kWh"
+    min: -0.50
+    max: 1.00
+    step: 0.01
+    mode: box
+    icon: mdi:cash-refund
   # Netafname (zonder de auto) die nodig is voor een boost. Een lopende boost
   # stopt als de netafname (met de auto) onder deze waarde - 1 kW zakt.
   # Houdt het EMS het netvermogen constant als de auto start, zet dit dan dicht
-  # bij het laadvermogen van de auto, zodat de import de auto dekt.
+  # bij het laadvermogen van de auto, zodat de import de auto dekt (of zet
+  # 'laadstroom regelen' aan).
+  # Bij een boost bij export geldt hetzelfde voor de teruglevering: minstens
+  # deze waarde zonder de auto om te starten, doorgaan zolang het net (met de
+  # auto) meer dan deze waarde - 1 kW terugkrijgt.
   bevcc_boost_min_import:
-    name: "BEVCC boost minimale EMS-import"
+    name: "BEVCC boost minimaal EMS-vermogen"
     unit_of_measurement: "kW"
     min: 0.5
     max: 16
@@ -163,6 +199,17 @@ input_boolean:
   bevcc_standaardwaarden:
     name: "BEVCC standaardwaarden ingesteld"
     icon: mdi:restore
+  # Aan = tijdens een boost de maximale laadstroom van EVCC regelen, zodat de
+  # auto (bij import) niet meer neemt dan er naar de thuisaccu gaat. Na de
+  # boost komt de oorspronkelijke waarde terug. Standaard uit.
+  bevcc_laadstroom_regelen:
+    name: "BEVCC laadstroom regelen bij boost"
+    icon: mdi:current-ac
+  # Aan = een boost bij export kijkt niet naar de accu-ondergrens: de auto
+  # mag de thuisaccu dan leeg laden tot het EMS stopt met terugleveren.
+  bevcc_boost_export_negeer_ondergrens:
+    name: "BEVCC boost bij export negeert accu-ondergrens"
+    icon: mdi:battery-alert-variant-outline
 
 # -----------------------------------------------------------------------------
 # 1. Bronnen
@@ -197,6 +244,39 @@ rest:
           {% set cur = disc | selectattr('start', 'eq', q) | map(attribute='directions') | first | default([], true) %}
           {% set prev = disc | selectattr('start', 'eq', q - 900000) | map(attribute='directions') | first | default([], true) %}
           {{ 'import' in cur or ('import' in prev and nu - q < 300000) }}
+
+      # Hetzelfde voor een aFRR-exportsessie (opregelen): het EMS levert extra
+      # terug, afgerekend tegen de opregelprijs (TenneT 'Afnemen'). Ook met
+      # 5 min overloop.
+      - name: "BEVCC aFRR-exportsessie"
+        unique_id: bevcc_afrr_exportsessie
+        icon: mdi:transmission-tower-export
+        availability: >-
+          {{ value_json is defined and value_json is mapping and 'afrrDiscovery' in value_json }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set q = nu - nu % 900000 %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set disc = data.get('afrrDiscovery', []) %}
+          {% set cur = disc | selectattr('start', 'eq', q) | map(attribute='directions') | first | default([], true) %}
+          {% set prev = disc | selectattr('start', 'eq', q - 900000) | map(attribute='directions') | first | default([], true) %}
+          {{ 'export' in cur or ('export' in prev and nu - q < 300000) }}
+
+      # Aan in een kwartier met een dynamisch (day-ahead) exportplan
+      # (dayAheadPlans, direction 'export'), met 5 min overloop. De prijs
+      # daarvan staat (nog) niet in de API: BEVCC boost dan niet bij export.
+      - name: "BEVCC dynamische export"
+        unique_id: bevcc_dynamische_export
+        icon: mdi:calendar-export
+        availability: >-
+          {{ value_json is defined and value_json is mapping and 'prices' in value_json }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set q = nu - nu % 900000 %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set plannen = data.get('dayAheadPlans', []) | selectattr('direction', 'eq', 'export') | list %}
+          {{ plannen | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu) | list | count > 0
+             or (nu - q < 300000 and plannen | selectattr('start', 'eq', q - 900000) | list | count > 0) }}
 
     sensor:
       # De eigen all-in kwartierprijs van Balans, zoals het Balans-dashboard
@@ -285,6 +365,33 @@ rest:
                      | map(attribute='values.day_ahead_import') | first | default(none) %}
           {{ v | round(5) if v is number else none }}
 
+      # Kale exportprijs van Balans voor het lopende kwartier: tijdens een
+      # aFRR-exportsessie de aFRR-exportprijs (in de bekeken gegevens gelijk
+      # aan onbalans_import, de opregelprijs), anders de onbalansprijs voor
+      # teruglevering. Terugval als de TenneT-bron niet werkt. Buiten een
+      # sessie staat in afrr_export het bod van Balans; dat telt niet.
+      - name: "BEVCC Balans exportprijs"
+        unique_id: bevcc_balans_exportprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:cash-refund
+        availability: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {{ data.get('prices', []) | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu)
+             | selectattr('values.onbalans_export', 'number') | list | count > 0 }}
+        value_template: >-
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set ns = namespace(kaal=none) %}
+          {% for p in data.get('prices', []) if p.start <= nu < p.end %}
+            {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
+                          | map(attribute='directions') | first | default([], true) %}
+            {% set v = p['values'] %}
+            {% set ns.kaal = v['afrr_export'] if 'export' in dirs and v['afrr_export'] is number else v['onbalans_export'] %}
+          {% endfor %}
+          {{ ns.kaal | round(5) if ns.kaal is number else none }}
+
   # Nieuwste BEVCC-versie op GitHub (elke 6 uur), voor de update-melding.
   - resource: https://api.github.com/repos/Freekers/BEVCC/releases/latest
     headers:
@@ -357,6 +464,26 @@ template:
             data:
               option: "{{ option }}"
 
+      # Doorgeefluik naar select.<prefix>_<laadpunt>_max_current (ampère, opties
+      # '1' t/m '64' vanaf de minimale stroom). Alleen voor de laadstroomregeling.
+      - name: "BEVCC EVCC max. laadstroom"
+        unique_id: bevcc_evcc_max_laadstroom
+        icon: mdi:current-ac
+        availability: >-
+          {% set e = 'select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_max_current' %}
+          {{ is_number(states(e)) }}
+        state: >-
+          {{ states('select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_max_current') }}
+        options: >-
+          {% set e = 'select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_max_current' %}
+          {{ state_attr(e, 'options') or [] }}
+        select_option:
+          - action: select.select_option
+            target:
+              entity_id: "select.{{ states('input_text.bevcc_evcc_prefix') }}_{{ states('input_text.bevcc_evcc_laadpunt') }}_max_current"
+            data:
+              option: "{{ option }}"
+
   - binary_sensor:
       - name: "BEVCC auto aangesloten"
         unique_id: bevcc_auto_aangesloten
@@ -419,6 +546,27 @@ template:
         availability: "{{ is_number(states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_soc')) }}"
         state: "{{ states('sensor.' ~ states('input_text.bevcc_evcc_prefix') ~ '_battery_soc') | float | round(1) }}"
 
+      # Minimale laadstroom van het laadpunt in EVCC (A); lager kan EVCC niet.
+      - name: "BEVCC min. laadstroom"
+        unique_id: bevcc_min_laadstroom
+        unit_of_measurement: "A"
+        icon: mdi:current-ac
+        availability: >-
+          {{ is_number(states('select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_min_current')) }}
+        state: >-
+          {{ states('select.' ~ states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') ~ '_min_current') | float }}
+
+      # Aantal fasen waarop de auto laadt (of gaat laden): de actieve fasen
+      # tijdens het laden, anders de ingestelde fasen (1 of 3), anders 3.
+      - name: "BEVCC laadfasen"
+        unique_id: bevcc_laadfasen
+        icon: mdi:sine-wave
+        state: >-
+          {% set lp = states('input_text.bevcc_evcc_prefix') ~ '_' ~ states('input_text.bevcc_evcc_laadpunt') %}
+          {% set actief = states('sensor.' ~ lp ~ '_phases_active') | int(0) %}
+          {% set ingesteld = states('select.' ~ lp ~ '_phases') | int(0) %}
+          {{ actief if actief in [1, 2, 3] else (ingesteld if ingesteld in [1, 3] else 3) }}
+
   # ---------------------------------------------------------------------------
   # 3. Prijs voor de beslissingen
   #    Afnameprijs (pauze, dashboard): wat extra afname nu kost.
@@ -430,6 +578,9 @@ template:
   #    Boostprijs: de afnameprijs, behalve in een kwartier met dynamische
   #      import zonder aFRR-sessie: dan de dynamische prijs.
   #    All-in = 1,21 x kaal + leverkosten + energiebelasting.
+  #    Exportprijs (kaal, boost bij export): wat het EMS nu voor teruglevering
+  #      krijgt. Tijdens een aFRR-exportsessie TenneT 'Afnemen' (opregelprijs),
+  #      anders TenneT 'Invoeden'; terugval de exportprijs van Balans.
   # ---------------------------------------------------------------------------
   - sensor:
       - name: "BEVCC afnameprijs"
@@ -509,6 +660,40 @@ template:
                   and not is_state('binary_sensor.bevcc_afrr_importsessie', 'on') %}dynamisch (day-ahead)
             {% else %}{{ states('sensor.bevcc_prijsbron') }}{% endif %}
 
+      # Kale prijs die het EMS nu voor teruglevering krijgt (EUR/kWh), voor een
+      # boost bij export. Een aFRR-exportsessie is opregelen: afgerekend tegen
+      # de opregelprijs, de kolom 'Afnemen' (in de bekeken gegevens was de
+      # aFRR-exportprijs van elk sessiekwartier gelijk aan onbalans_import).
+      # Die kan binnen het kwartier alleen nog stijgen. Andere teruglevering:
+      # 'Invoeden'. Tijdens een dynamisch exportplan is de prijs onbekend.
+      - name: "BEVCC exportprijs"
+        unique_id: bevcc_exportprijs
+        unit_of_measurement: "EUR/kWh"
+        state_class: measurement
+        icon: mdi:cash-refund
+        availability: >-
+          {% set t = 'sensor.bevcc_tennet_onbalans' %}
+          {% set kolom = 'afnemen' if is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') else 'invoeden' %}
+          {{ not is_state('binary_sensor.bevcc_dynamische_export', 'on')
+             and ((has_value(t) and is_number(state_attr(t, kolom)))
+                  or is_number(states('sensor.bevcc_balans_exportprijs'))) }}
+        state: >-
+          {% set t = 'sensor.bevcc_tennet_onbalans' %}
+          {% set kolom = 'afnemen' if is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') else 'invoeden' %}
+          {% set live = state_attr(t, kolom) if has_value(t) else none %}
+          {% if is_number(live) %}{{ (live | float / 1000) | round(5) }}
+          {% else %}{{ states('sensor.bevcc_balans_exportprijs') | float(0) | round(5) }}{% endif %}
+        attributes:
+          bron: >-
+            {% set t = 'sensor.bevcc_tennet_onbalans' %}
+            {% set sessie = is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') %}
+            {% if is_state('binary_sensor.bevcc_dynamische_export', 'on') %}dynamische export (prijs onbekend)
+            {% elif has_value(t) and is_number(state_attr(t, 'afnemen' if sessie else 'invoeden')) %}
+              {{- 'aFRR-export (TenneT afnemen)' if sessie else 'onbalans (TenneT invoeden)' -}}
+            {% elif is_number(states('sensor.bevcc_balans_exportprijs')) %}
+              {{- 'aFRR-export (Balans)' if sessie else 'Balans kwartierprijs export' -}}
+            {% else %}onbekend{% endif %}
+
   # ---------------------------------------------------------------------------
   # 4. Voorwaarden
   # ---------------------------------------------------------------------------
@@ -547,7 +732,7 @@ template:
       #   - alleen bij 'Boost bij' = 'aFRR + onbalans': de import duurt al 90 s.
       # Doorgaan zolang:
       #   - de prijs onder 'Boost onder' + 0,02 blijft, en
-      #   - de netafname boven 'Boost min. EMS-import' - 1 kW blijft (minimaal
+      #   - de netafname boven 'Boost min. EMS-vermogen' - 1 kW blijft (minimaal
       #     0 kW). Hier telt de auto wel mee: tijdens een import houdt het EMS
       #     vaak het netvermogen vast en laadt de accu minder zodra de auto
       #     start. Zakt de netafname hieronder, dan voedt vooral de thuisaccu
@@ -555,6 +740,12 @@ template:
       #   - de thuisaccu boven de ondergrens - 2 % blijft (onbekend -> stop), en
       #   - bij 'alleen aFRR': de aFRR-importsessie nog loopt; bij
       #     'aFRR + dynamisch': de aFRR-sessie of de dynamische import nog loopt.
+      # Met 'laadstroom regelen' (en een regelbaar laadpunt) daarnaast:
+      #   - start alleen als de auto minstens op zijn minimale laadstroom kan
+      #     laden met wat er naar de thuisaccu gaat (anders ontlaadt de accu
+      #     ook bij de laagste stroom), en
+      #   - stop als de thuisaccu toch meer dan 1 kW ontlaadt (2 min): de
+      #     import dekt de auto niet meer, ook niet op de laagste stroom.
       # 2 min uitstelvertraging tegen korte dips, 5 min rust na een boost (de boost
       # verandert zelf de vermogens die hier gemeten worden; zonder rust kan hij
       # blijven aan- en uitgaan).
@@ -578,12 +769,76 @@ template:
           {% set ook_onbalans = bij == 'aFRR + onbalans' %}
           {% set ook_dynamisch = bij in ['aFRR + dynamisch', 'aFRR + onbalans'] %}
           {% set dynamisch = ook_dynamisch and is_number(states('sensor.bevcc_balans_dynamisch_prijs')) %}
+          {% set regelen = is_state('input_boolean.bevcc_laadstroom_regelen', 'on')
+                           and is_number(states('select.bevcc_evcc_max_laadstroom'))
+                           and states('input_text.bevcc_ingestelde_stroom') != 'handmatig' %}
+          {% set min_laden = [states('sensor.bevcc_min_laadstroom') | float(6), 1] | max * 230
+                             * states('sensor.bevcc_laadfasen') | int(3) %}
           {% if this.state == 'on' %}
             {{ prijs < grens + 0.02 and net > [min_import - 1000, 0] | max
-               and soc >= ondergrens - 2 and (sessie or dynamisch or ook_onbalans) }}
+               and soc >= ondergrens - 2 and (sessie or dynamisch or ook_onbalans)
+               and (not regelen or accu <= 1000) }}
           {% else %}
             {{ grens > -0.5 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
                and (sessie or dynamisch or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
+               and (not regelen or auto - accu - 300 >= min_laden)
+               and now() - this.last_changed > timedelta(minutes=5) }}
+          {% endif %}
+
+      # EMS levert terug: de thuisaccu ontlaadt en het net krijgt (zonder de
+      # auto) meer dan 'Boost min. EMS-vermogen'. Pas na 90 s aan, zodat korte
+      # pulsen zonder aFRR-exportsessie genegeerd worden.
+      - name: "BEVCC EMS-export"
+        unique_id: bevcc_ems_export
+        icon: mdi:home-export-outline
+        delay_on: "00:01:30"
+        state: >-
+          {% set min_export = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
+          {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
+          {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
+          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
+          {{ accu > 500 and net - auto < - min_export }}
+
+      # Boost bij export: het EMS verkoopt stroom uit de thuisaccu voor een
+      # kale prijs op of onder 'Boost bij export onder'; dan liever de auto
+      # laden. Start als:
+      #   - de exportprijs op of onder de grens ligt (grens -0,50 = uit),
+      #   - de thuisaccu met meer dan 500 W ontlaadt en het net (zonder de
+      #     auto) meer dan 'Boost min. EMS-vermogen' terugkrijgt,
+      #   - Balans een aFRR-exportsessie meldt (direct), of de teruglevering al
+      #     90 s duurt,
+      #   - de thuisaccu op of boven de ondergrens zit (tenzij genegeerd), en
+      #   - de vorige boost bij export 5 min geleden eindigde.
+      # Doorgaan zolang de prijs op of onder de grens + 0,02 blijft, het net
+      # (met de auto) meer dan 'Boost min. EMS-vermogen' - 1 kW terugkrijgt
+      # (minimaal 0 kW), en de thuisaccu boven de ondergrens - 2 % blijft
+      # (tenzij genegeerd). Houdt het EMS de teruglevering vast als de auto
+      # start, dan laadt de auto uit de thuisaccu en loopt de teruglevering
+      # door; neemt de auto de teruglevering over, dan zakt die en stopt de
+      # boost (met 'laadstroom regelen' laat de regeling genoeg over).
+      # Tijdens een dynamisch exportplan is de prijs onbekend: geen boost.
+      - name: "BEVCC goedkope export"
+        unique_id: bevcc_goedkope_export
+        icon: mdi:transmission-tower-export
+        delay_off: "00:02:00"
+        state: >-
+          {% set prijs = states('sensor.bevcc_exportprijs') | float(99) %}
+          {% set grens = states('input_number.bevcc_boost_export_onder') | float(-0.5) %}
+          {% set min_export = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
+          {% set negeer = is_state('input_boolean.bevcc_boost_export_negeer_ondergrens', 'on') %}
+          {% set ondergrens = states('input_number.bevcc_accu_ondergrens') | float(0) %}
+          {% set soc = states('sensor.bevcc_thuisaccu_soc') | float(0) %}
+          {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
+          {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
+          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
+          {% set sessie = is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') %}
+          {% if this.state == 'on' %}
+            {{ grens > -0.5 and prijs <= grens + 0.02 and net < - ([min_export - 1000, 0] | max)
+               and (negeer or soc >= ondergrens - 2) }}
+          {% else %}
+            {{ grens > -0.5 and prijs <= grens and (negeer or soc >= ondergrens)
+               and accu > 500 and net - auto < - min_export
+               and (sessie or is_state('binary_sensor.bevcc_ems_export', 'on'))
                and now() - this.last_changed > timedelta(minutes=5) }}
           {% endif %}
 
@@ -605,13 +860,70 @@ template:
           {% if not is_state('input_boolean.bevcc_standaardwaarden', 'on') %}geen
           {% elif not is_state('binary_sensor.bevcc_auto_aangesloten', 'on') %}geen
           {% elif piek and (is_state('binary_sensor.bevcc_auto_laadt', 'on') or status == 'pauze') %}pauze
-          {% elif is_state('binary_sensor.bevcc_goedkope_import', 'on') %}boost
+          {% elif is_state('binary_sensor.bevcc_goedkope_import', 'on')
+                  or is_state('binary_sensor.bevcc_goedkope_export', 'on') %}boost
           {% else %}geen{% endif %}
+        attributes:
+          # waarom een boost: 'import' (goedkope EMS-import) of 'export'
+          # (goedkope teruglevering); leeg zonder boostvoorwaarde
+          reden: >-
+            {% if is_state('binary_sensor.bevcc_goedkope_import', 'on') %}import
+            {% elif is_state('binary_sensor.bevcc_goedkope_export', 'on') %}export
+            {% else %}{% endif %}
+
+      # Laadstroomregeling: de maximale laadstroom (A) die de auto nu mag
+      # hebben. Alleen tijdens een boost met 'laadstroom regelen' aan, anders
+      # onbekend. De auto krijgt wat hij nu laadt plus de ruimte:
+      #   import: wat er nu naar de thuisaccu gaat, min 300 W marge. Houdt het
+      #           EMS de netafname vast, dan laadt de thuisaccu daardoor nog
+      #           net, in plaats van de auto te voeden.
+      #   export: wat er nu nog naar het net gaat, min de grens waarop de boost
+      #           stopt ('Boost min. EMS-vermogen' - 1 kW) en 300 W marge.
+      #           Houdt het EMS de teruglevering vast, dan geeft dit de volle
+      #           stroom; neemt de auto de teruglevering over, dan voorkomt dit
+      #           afname van het net.
+      # Afgerond naar beneden op hele ampère (230 V per fase), tussen de
+      # minimale stroom van EVCC en de oorspronkelijke maximale stroom.
+      # Omlaag direct, omhoog pas bij 300 W extra ruimte: zo springt de stroom
+      # niet heen en weer als de meting rond een ampèregrens schommelt.
+      - name: "BEVCC laadstroom doel"
+        unique_id: bevcc_laadstroom_doel
+        unit_of_measurement: "A"
+        icon: mdi:current-ac
+        availability: >-
+          {{ is_number(states('select.bevcc_evcc_max_laadstroom'))
+             or is_number(states('input_text.bevcc_te_herstellen_stroom')) }}
+        state: >-
+          {% set bewaard = states('input_text.bevcc_te_herstellen_stroom') %}
+          {% set max_a = (bewaard if is_number(bewaard) else states('select.bevcc_evcc_max_laadstroom')) | float(0) %}
+          {% set min_a = [states('sensor.bevcc_min_laadstroom') | float(6), 1] | max %}
+          {% set fasen = states('sensor.bevcc_laadfasen') | int(3) %}
+          {% set export = is_state('binary_sensor.bevcc_goedkope_export', 'on')
+                          and not is_state('binary_sensor.bevcc_goedkope_import', 'on') %}
+          {% set meting = states('sensor.bevcc_net_vermogen' if export else 'sensor.bevcc_thuisaccu_vermogen') %}
+          {% set grens = [states('input_number.bevcc_boost_min_import') | float(2) * 1000 - 1000, 0] | max if export else 0 %}
+          {% if is_state('input_select.bevcc_status', 'boost') and is_state('input_boolean.bevcc_laadstroom_regelen', 'on')
+                and is_number(meting) and max_a >= 1 %}
+            {% set w = 230 * fasen %}
+            {% set beschikbaar = states('sensor.bevcc_laadvermogen') | float(0) - (meting | float) - grens - 300 %}
+            {% set huidig = states('select.bevcc_evcc_max_laadstroom') | float(0) %}
+            {% set doel = (beschikbaar / w) | round(0, 'floor') %}
+            {% if doel > huidig %}{% set doel = [huidig, ((beschikbaar - 300) / w) | round(0, 'floor')] | max %}{% endif %}
+            {{ [[doel, max_a] | min, min_a | round(0, 'ceil')] | max | int }}
+          {% else %}{{ none }}{% endif %}
+        attributes:
+          reden: >-
+            {{ 'export' if is_state('binary_sensor.bevcc_goedkope_export', 'on')
+                           and not is_state('binary_sensor.bevcc_goedkope_import', 'on') else 'import' }}
+          fasen: "{{ states('sensor.bevcc_laadfasen') | int(3) }}"
+          oorspronkelijk: >-
+            {% set bewaard = states('input_text.bevcc_te_herstellen_stroom') %}
+            {{ (bewaard if is_number(bewaard) else states('select.bevcc_evcc_max_laadstroom')) | int(0) }}
 
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.3.0"
+        state: "1.4.0"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"
@@ -690,10 +1002,12 @@ automation:
           modus_na_status: >-
             {% set m = states.select.bevcc_evcc_modus %}
             {{ m is not none and m.last_changed > states.input_select.bevcc_status.last_changed }}
+          reden: "{{ state_attr('sensor.bevcc_doel', 'reden') or 'import' }}"
           info: >-
             prijs € {{ states('sensor.bevcc_afnameprijs') }}/kWh ({{ states('sensor.bevcc_prijsbron') }}),
             net {{ states('sensor.bevcc_net_vermogen') }} W,
-            thuisaccu {{ states('sensor.bevcc_thuisaccu_vermogen') }} W / {{ states('sensor.bevcc_thuisaccu_soc') }} %
+            thuisaccu {{ states('sensor.bevcc_thuisaccu_vermogen') }} W / {{ states('sensor.bevcc_thuisaccu_soc') }} %,
+            auto {{ states('sensor.bevcc_laadvermogen') }} W
 
       - choose:
           # A) Onze modus is niet bij EVCC aangekomen
@@ -825,8 +1139,10 @@ automation:
                 data:
                   name: BEVCC
                   message: >-
-                    Boost (goedkope EMS-import, boostprijs € {{ states('sensor.bevcc_boostprijs') }}/kWh,
-                    {{ state_attr('sensor.bevcc_boostprijs', 'bron') }}): {{ info }}; daarna terug naar 'smart'
+                    {% if reden == 'export' %}Boost (goedkope teruglevering, exportprijs € {{ states('sensor.bevcc_exportprijs') }}/kWh kaal,
+                    {{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% else %}Boost (goedkope EMS-import,
+                    boostprijs € {{ states('sensor.bevcc_boostprijs') }}/kWh,
+                    {{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}: {{ info }}; daarna terug naar 'smart'
                   entity_id: select.bevcc_evcc_modus
 
           # F) Vrijgeven: situatie voorbij (of een boost tijdens een pauze vanuit Snel)
@@ -881,6 +1197,193 @@ automation:
                   message: "Vrijgegeven ({{ status }} -> {{ doel }}): {{ info }}; modus nu '{{ states('select.bevcc_evcc_modus') }}' (doel '{{ bewaard }}')"
                   entity_id: select.bevcc_evcc_modus
 
+  # Laadstroomregeling: tijdens een boost met 'laadstroom regelen' aan de
+  # maximale laadstroom van EVCC op sensor.bevcc_laadstroom_doel zetten, en na
+  # de boost de oorspronkelijke waarde terugzetten. Net als bij de modus:
+  # wijzigt iemand anders de maximale laadstroom tijdens de boost, dan stapt
+  # BEVCC opzij en laat die waarde staan.
+  - id: bevcc_laadstroomregeling
+    alias: "BEVCC laadstroomregeling"
+    description: >-
+      Zet tijdens een boost de maximale laadstroom van EVCC zo dat de auto niet
+      meer neemt dan de goedkope import levert, en daarna terug.
+    mode: queued
+    max: 3
+    max_exceeded: silent
+    triggers:
+      # Regeling begint (boost start of schakelaar aan): direct
+      - trigger: state
+        id: begin
+        entity_id: sensor.bevcc_laadstroom_doel
+        from: ["unknown", "unavailable"]
+      # Nieuw doel, 20 s stabiel (EVCC en de auto hebben tijd nodig)
+      - trigger: state
+        id: doel
+        entity_id: sensor.bevcc_laadstroom_doel
+        not_to: ["unknown", "unavailable"]
+        for: "00:00:20"
+      # Boost voorbij of schakelaar uit: terugzetten
+      - trigger: state
+        id: status
+        entity_id: input_select.bevcc_status
+      - trigger: state
+        id: schakelaar
+        entity_id: input_boolean.bevcc_laadstroom_regelen
+      # Maximale laadstroom 1 min stabiel: handmatige wijziging herkennen
+      - trigger: state
+        id: stroom
+        entity_id: select.bevcc_evcc_max_laadstroom
+        not_to: ["unknown", "unavailable"]
+        for: "00:01:00"
+      # Vangnet (en nieuwe poging na een mislukt terugzetten)
+      - trigger: time_pattern
+        id: tik
+        minutes: "/5"
+      - trigger: homeassistant
+        id: start
+        event: start
+
+    actions:
+      - variables:
+          actief: >-
+            {{ is_state('input_select.bevcc_status', 'boost') and is_state('input_boolean.bevcc_laadstroom_regelen', 'on') }}
+          huidig: "{{ states('select.bevcc_evcc_max_laadstroom') }}"
+          doel: "{{ states('sensor.bevcc_laadstroom_doel') }}"
+          bewaard: "{{ states('input_text.bevcc_te_herstellen_stroom') }}"
+          ingesteld: "{{ states('input_text.bevcc_ingestelde_stroom') }}"
+          # BEVCC zette de stroom meer dan een minuut geleden: EVCC had tijd
+          ingesteld_oud: >-
+            {% set s = states.input_text.bevcc_ingestelde_stroom %}
+            {{ s is not none and now() - s.last_changed > timedelta(minutes=1) }}
+
+      - choose:
+          # A) Iemand anders wijzigde de maximale laadstroom tijdens de boost
+          #    (of EVCC nam onze waarde niet over) -> opzij, niets terugzetten
+          - conditions:
+              - "{{ actief and is_number(ingesteld) and is_number(huidig)
+                    and huidig | float != ingesteld | float and ingesteld_oud }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.bevcc_ingestelde_stroom
+                data:
+                  value: handmatig
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.bevcc_te_herstellen_stroom
+                data:
+                  value: ""
+              - action: logbook.log
+                data:
+                  name: BEVCC
+                  message: >-
+                    Maximale laadstroom staat op {{ huidig }} A in plaats van {{ ingesteld }} A (handmatig gewijzigd
+                    of niet overgenomen door EVCC); BEVCC regelt de laadstroom niet meer tot de boost voorbij is
+                  entity_id: select.bevcc_evcc_modus
+
+          # B) Regelen: de maximale laadstroom naar het doel
+          - conditions:
+              - "{{ actief and ingesteld != 'handmatig' and is_number(doel) and is_number(huidig)
+                    and doel | float != huidig | float }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ not is_number(bewaard) }}"
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.bevcc_te_herstellen_stroom
+                    data:
+                      value: "{{ huidig | int }}"
+                  - action: logbook.log
+                    data:
+                      name: BEVCC
+                      message: >-
+                        Laadstroom geregeld ({{ state_attr('sensor.bevcc_laadstroom_doel', 'reden') }}): maximaal
+                        {{ huidig | int }} A -> {{ doel }} A bij {{ state_attr('sensor.bevcc_laadstroom_doel', 'fasen') }}
+                        fase(n); net {{ states('sensor.bevcc_net_vermogen') }} W, thuisaccu
+                        {{ states('sensor.bevcc_thuisaccu_vermogen') }} W, auto {{ states('sensor.bevcc_laadvermogen') }} W
+                      entity_id: select.bevcc_evcc_modus
+              # eerst onthouden, dan zetten: de controle in A rekent vanaf hier
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.bevcc_ingestelde_stroom
+                data:
+                  value: "{{ doel | int }}"
+              - action: select.select_option
+                continue_on_error: true
+                target:
+                  entity_id: select.bevcc_evcc_max_laadstroom
+                data:
+                  option: "{{ doel | int }}"
+
+          # C) Boost voorbij of regeling uit: oorspronkelijke waarde terug. Alleen
+          #    als de stroom nog op de waarde van BEVCC staat; tot 1 min wachten,
+          #    lukt het niet, dan een melding en een nieuwe poging bij de volgende
+          #    tik (5 min).
+          - conditions:
+              - "{{ not actief and is_number(bewaard) and is_number(huidig) }}"
+            sequence:
+              - variables:
+                  van_bevcc: "{{ huidig | float == ingesteld | float(-1) }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ van_bevcc and huidig | float != bewaard | float }}"
+                then:
+                  - action: select.select_option
+                    continue_on_error: true
+                    target:
+                      entity_id: select.bevcc_evcc_max_laadstroom
+                    data:
+                      option: "{{ bewaard | int }}"
+                  - wait_template: "{{ states('select.bevcc_evcc_max_laadstroom') | float(0) == bewaard | float }}"
+                    timeout: "00:01:00"
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ not van_bevcc or states('select.bevcc_evcc_max_laadstroom') | float(0) == bewaard | float }}
+                then:
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.bevcc_te_herstellen_stroom
+                    data:
+                      value: ""
+                  - action: input_text.set_value
+                    target:
+                      entity_id: input_text.bevcc_ingestelde_stroom
+                    data:
+                      value: ""
+                  - action: persistent_notification.dismiss
+                    data:
+                      notification_id: bevcc_laadstroom_herstel
+                  - action: logbook.log
+                    data:
+                      name: BEVCC
+                      message: >-
+                        {% if van_bevcc %}Maximale laadstroom terug naar {{ bewaard | int }} A
+                        {%- else %}Maximale laadstroom niet teruggezet: staat op {{ huidig }} A (handmatig gewijzigd){% endif %}
+                      entity_id: select.bevcc_evcc_modus
+                else:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: bevcc_laadstroom_herstel
+                      title: BEVCC
+                      message: >-
+                        De maximale laadstroom van EVCC staat na de boost nog op
+                        {{ states('select.bevcc_evcc_max_laadstroom') }} A in plaats van {{ bewaard | int }} A.
+                        BEVCC probeert het elke 5 minuten opnieuw. Controleer de EVCC-integratie, of zet de
+                        maximale laadstroom zelf terug.
+
+          # D) Opruimen na een handmatige wijziging
+          - conditions:
+              - "{{ not actief and ingesteld != '' and not is_number(bewaard) }}"
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.bevcc_ingestelde_stroom
+                data:
+                  value: ""
+
   # Standaardwaarden: eenmalig na installatie, of opnieuw door
   # 'BEVCC standaardwaarden ingesteld' uit te zetten.
   - id: bevcc_standaardwaarden
@@ -930,11 +1433,21 @@ automation:
           entity_id: input_number.bevcc_leverkosten
         data:
           value: 0.02
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.bevcc_boost_export_onder
+        data:
+          value: -0.50
       - action: input_select.select_option
         target:
           entity_id: input_select.bevcc_boost_bij
         data:
           option: alleen aFRR
+      - action: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.bevcc_laadstroom_regelen
+            - input_boolean.bevcc_boost_export_negeer_ondergrens
       - action: input_boolean.turn_on
         target:
           entity_id: input_boolean.bevcc_standaardwaarden
@@ -987,6 +1500,8 @@ automation:
                 De Balans-API geeft al 10 minuten geen gegevens. BEVCC ziet nu geen
                 aFRR-importsessies en rekent met de TenneT-afnameprijs (te hoog tijdens
                 een sessie), en boost alleen nog bij 'Boost bij' = 'aFRR + onbalans'.
+                Een boost bij export rekent dan met de prijs 'Invoeden', ook tijdens een
+                aFRR-exportsessie.
                 Waarschijnlijk is de sessiecookie verlopen: log opnieuw in op
                 dashboard.balansenergie.nl, zet de nieuwe Cookie-header in
                 bevcc_balans_cookie in secrets.yaml en herlaad 'RESTful'

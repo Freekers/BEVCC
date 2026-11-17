@@ -7,10 +7,17 @@ onbalansprijs en de aFRR-sessies van je thuisbatterij bij Balans Energie:
   EVCC op *Uit*.
 - **Boost** bij goedkope import: laadt het Balans-EMS je thuisbatterij goedkoop uit
   het net, dan zet BEVCC EVCC op *Snel*, zodat de auto meelaadt.
-- **Terugzetten**: daarna krijgt EVCC de modus terug die er stond.
+- **Boost bij export** (optioneel): verkoopt het EMS stroom uit je thuisbatterij voor een
+  lage prijs, dan zet BEVCC EVCC op *Snel*, zodat je die stroom zelf gebruikt.
+- **Laadstroom regelen** (optioneel): tijdens een boost zet BEVCC de maximale laadstroom
+  zo, dat de auto niet meer neemt dan de goedkope import levert. Zo laadt een auto van
+  10 kW de thuisaccu niet leeg tijdens een import van 5 kW.
+- **Terugzetten**: daarna krijgt EVCC de modus (en de maximale laadstroom) terug die er
+  stond.
 
 EVCC blijft de baas over je laadpunt en de vermogensbegrenzing. BEVCC wisselt alleen de
-modus, en alleen om prijsredenen.
+modus, en alleen om prijsredenen; met *Laadstroom regelen* ook de maximale laadstroom,
+alleen tijdens een boost.
 
 > [!IMPORTANT]
 > **BEVCC houdt geen rekening met een vertrektijd of een gewenste laadtoestand (SoC) van
@@ -43,7 +50,11 @@ modus, en alleen om prijsredenen.
 |---|---|---|---|
 | **Pauze** | auto laadt, all-in afnameprijs boven *Pauze boven* (standaard € 0,35/kWh) | Smart of Snel → **Uit** | terug naar Smart of Snel als de prijs 2 minuten lang onder *Pauze boven* − € 0,02 ligt |
 | **Boost** | het EMS laadt de thuisaccu uit het net, all-in prijs onder *Boost onder* (standaard € 0,20/kWh), thuisaccu op of boven de *ondergrens* (standaard 50 %) | Smart → **Snel** | terug naar Smart als de goedkope import voorbij is |
+| **Boost bij export** (standaard uit) | het EMS levert stroom uit de thuisaccu terug voor een kale prijs op of onder *Boost bij export onder*, thuisaccu op of boven de *ondergrens* (of: ondergrens genegeerd) | Smart → **Snel** | terug naar Smart als de goedkope teruglevering voorbij is |
 | **Rust** | geen van beide | ongewijzigd | – |
+
+Met **Laadstroom regelen** aan past BEVCC tijdens een boost ook de maximale laadstroom van
+EVCC aan, en zet hem daarna terug (zie [Laadstroom regelen](#laadstroom-regelen)).
 
 - Een prijspiek gaat altijd voor een boost.
 - Pauzeren gebeurt vanuit Smart en Snel, boosten alleen vanuit Smart. Staat EVCC op
@@ -58,12 +69,19 @@ modus, en alleen om prijsredenen.
 Een boost stopt (2 minuten vertraging tegen korte dips) zodra:
 
 - de prijs op of boven *Boost onder* + € 0,02 komt, of
-- de netafname (met de auto) onder *Boost min. EMS-import* − 1 kW zakt (standaard
+- de netafname (met de auto) onder *Boost min. EMS-vermogen* − 1 kW zakt (standaard
   2 − 1 = 1 kW): het EMS importeert (bijna) niet meer en vooral de thuisaccu voedt de
   auto, of
 - de thuisaccu onder de *ondergrens* − 2 % zakt, of
 - bij *Boost bij* = *alleen aFRR*: de aFRR-importsessie eindigt; bij *aFRR + dynamisch*: de
-  aFRR-sessie en de dynamische import allebei voorbij zijn.
+  aFRR-sessie en de dynamische import allebei voorbij zijn, of
+- met *Laadstroom regelen* aan: de thuisaccu toch meer dan 1 kW ontlaadt (dan dekt de
+  import de auto niet meer, ook niet op de laagste laadstroom).
+
+Een boost bij export stopt (ook na 2 minuten) zodra de exportprijs boven *Boost bij export
+onder* + € 0,02 komt, het net (met de auto) minder dan *Boost min. EMS-vermogen* − 1 kW
+terugkrijgt, of de thuisaccu onder de *ondergrens* − 2 % zakt (tenzij je de ondergrens
+voor export negeert).
 
 Na een boost wacht BEVCC 5 minuten voordat een nieuwe boost kan starten. De boost
 verandert zelf de vermogens die BEVCC meet (het EMS reageert op de auto); zonder die rust
@@ -108,6 +126,23 @@ laadt. Omgekeerd ligt de grens van € 0,35 all-in bij ongeveer 181 €/MWh kaal
 Vaste kosten per dag of jaar (vastrecht, netbeheer, heffingskorting) tellen niet mee:
 die betaal je ook als de auto niet laadt, dus ze veranderen de beslissing niet.
 
+### Exportprijs (boost bij export)
+
+Voor een boost bij export telt wat het EMS voor teruggeleverde stroom krijgt: de **kale
+exportprijs** (`sensor.bevcc_exportprijs`), zonder btw, leverkosten of energiebelasting.
+
+| Situatie | Kale exportprijs | Bron in Home Assistant |
+|---|---|---|
+| aFRR-exportsessie van jouw EMS | live onbalansprijs **Afnemen** (de opregelprijs) | `sensor.bevcc_tennet_onbalans`, attribuut `afnemen` |
+| andere teruglevering | live onbalansprijs **Invoeden** | `sensor.bevcc_tennet_onbalans`, attribuut `invoeden` |
+| live prijs niet beschikbaar | exportprijs van Balans voor het kwartier | `sensor.bevcc_balans_exportprijs` |
+| dynamisch (day-ahead) exportplan | onbekend: geen boost bij export | `binary_sensor.bevcc_dynamische_export` |
+
+Een aFRR-exportsessie is het spiegelbeeld van een importsessie: TenneT moet **opregelen**,
+jouw EMS levert extra terug, en dat wordt afgerekend tegen de opregelprijs. Die staat in
+de kolom *Afnemen*. In de bekeken gegevens van Balans was de aFRR-exportprijs van elk
+sessiekwartier gelijk aan de onbalansprijs voor afnemen van dat kwartier.
+
 ## Vereisten
 
 - Een **Balans Energie**-contract met dynamische (onbalans)prijzen en een thuisbatterij
@@ -118,14 +153,18 @@ die betaal je ook als de auto niet laadt, dus ze veranderen de beslissing niet.
   laadpunt `select.<prefix>_<laadpunt>_mode`, `binary_sensor.<prefix>_<laadpunt>_connected`,
   `binary_sensor.<prefix>_<laadpunt>_charging` en `sensor.<prefix>_<laadpunt>_charge_power`,
   en van de site `sensor.<prefix>_grid_power`, `sensor.<prefix>_battery_power` en
-  `sensor.<prefix>_battery_soc`.
+  `sensor.<prefix>_battery_soc`. Voor *Laadstroom regelen* daarnaast
+  `select.<prefix>_<laadpunt>_max_current` en (als ze er zijn)
+  `select.<prefix>_<laadpunt>_min_current`, `sensor.<prefix>_<laadpunt>_phases_active` en
+  `select.<prefix>_<laadpunt>_phases`.
 - **Home Assistant 2025.1 of nieuwer** (Home Assistant OS of Container: `curl` en
   `python3` zijn daar aanwezig).
 - Home Assistant moet `dashboard.balansenergie.nl`, `services.tenergy.nl` en
   `api.github.com` kunnen bereiken.
 - Aanbevolen: een **circuit met maximale stroom** (hoofdzekering) in EVCC. In de modus
   Snel laadt de auto op vol vermogen terwijl de thuisaccu ook laadt; EVCC's
-  vermogensbegrenzing blijft daarbij gewoon gelden, BEVCC regelt geen stroom.
+  vermogensbegrenzing blijft daarbij gewoon gelden. *Laadstroom regelen* verlaagt alleen
+  de maximale stroom van het laadpunt en vervangt die begrenzing niet.
 
 ## Installatie
 
@@ -184,13 +223,17 @@ updates.
 | Pauze boven | `input_number.bevcc_pauze_boven` | € 0,35 | All-in prijs waarboven het laden pauzeert. |
 | Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op het minimum (− € 0,50) staat boost uit. |
 | Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + dynamisch*: ook tijdens dynamische (day-ahead) import. *aFRR + onbalans*: bij alle EMS-import, dus ook dynamisch. Zie [ontwerpkeuzes](#boost-bij-afrr-dynamisch-of-onbalans). |
-| Boost min. EMS-import | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. |
+| Boost min. EMS-vermogen | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. Bij een boost bij export hetzelfde voor de teruglevering. |
 | Accu-ondergrens | `input_number.bevcc_accu_ondergrens` | 50 % | Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder. |
+| Boost bij export onder | `input_number.bevcc_boost_export_onder` | uit (− € 0,50) | **Kale** exportprijs waarop of waaronder je de teruggeleverde stroom liever zelf gebruikt. Op het minimum (− € 0,50) staat boost bij export uit. Zie [Boost bij export](#boost-bij-export). |
+| Export negeert accu-ondergrens | `input_boolean.bevcc_boost_export_negeer_ondergrens` | uit | Aan: een boost bij export kijkt niet naar de *Accu-ondergrens*. De auto mag de thuisaccu dan leeg laden zolang het EMS terug levert. |
+| Laadstroom regelen | `input_boolean.bevcc_laadstroom_regelen` | uit | Aan: tijdens een boost past BEVCC de maximale laadstroom van EVCC aan. Zie [Laadstroom regelen](#laadstroom-regelen). |
 | Energiebelasting | `input_number.bevcc_energiebelasting` | € 0,11085 | Per kWh incl. btw, 2026, eerste schijf. **Elk jaar per 1 januari bijwerken.** |
 | Leverkosten | `input_number.bevcc_leverkosten` | € 0,02 | Opslag van Balans per kWh incl. btw. |
 
 Zet je `input_boolean.bevcc_standaardwaarden` uit, dan zet BEVCC alle instellingen terug
-op de standaardwaarden.
+op de standaardwaarden. Bij een update naar 1.4 staan de nieuwe instellingen vanzelf uit;
+je bestaande instellingen blijven staan.
 
 ## Updaten
 
@@ -247,8 +290,8 @@ Je zou een aFRR-sessie kunnen afleiden uit een groot verschil tussen de import- 
 exportprijs in het Balans-dashboard. Dat gaat vaak mis: in een steekproef van 342
 kwartieren klopte die vuistregel 144 keer niet. BEVCC leest daarom de richting van de
 sessie die Balans zelf meldt (`afrrDiscovery`, met de richtingen `import` en `export`).
-Alleen een **import**sessie telt: dan neemt het EMS extra stroom af, en daar gaat BEVCC
-over.
+Een **import**sessie telt voor de afnameprijs en een gewone boost: dan neemt het EMS extra
+stroom af. Een **export**sessie telt alleen voor de exportprijs bij een boost bij export.
 
 ### Tijdens een aFRR-importsessie: de kolom *Invoeden*
 
@@ -336,16 +379,16 @@ kan de thuisaccu (deels) de auto voeden in plaats van het net. EVCC's eigen inst
 voor de thuisbatterij (voorrang, buffer) gelden alleen bij laden op zonne-energie, niet
 in Snel. Daarom start een boost alleen als de thuisaccu op of boven de ondergrens zit, en
 stopt hij 2 % eronder. Daarnaast stopt een boost als de netafname onder *Boost min.
-EMS-import* − 1 kW zakt: dan dekt vooral de thuisaccu het verbruik van huis en auto, en is
+EMS-vermogen* − 1 kW zakt: dan dekt vooral de thuisaccu het verbruik van huis en auto, en is
 de goedkope import (grotendeels) voorbij.
 
-Wil je dat de import de auto helemaal dekt, zet *Boost min. EMS-import* dan dicht bij het
-laadvermogen van je auto.
+Wil je dat de import de auto helemaal dekt, zet dan *Laadstroom regelen* aan (zie
+hieronder), of zet *Boost min. EMS-vermogen* dicht bij het laadvermogen van je auto.
 
 ### EMS-import herkennen
 
 BEVCC ziet een EMS-import als de thuisaccu met meer dan 500 W laadt en de netafname
-zonder de auto boven *Boost min. EMS-import* ligt. Laden op zonne-energie valt daarmee af:
+zonder de auto boven *Boost min. EMS-vermogen* ligt. Laden op zonne-energie valt daarmee af:
 dan is de netafname laag of negatief.
 
 Starten en doorgaan meten bewust iets anders. Bij de start telt de auto niet mee: de
@@ -353,8 +396,94 @@ import moet echt van het EMS komen. Tijdens de boost telt de auto wel mee: het E
 tijdens een import vaak het netvermogen vast en laadt de thuisaccu minder (of ontlaadt
 hem) zodra de auto start. De netafname zonder de auto kan dan tot onder nul zakken terwijl
 de goedkope import gewoon doorloopt. Daarom blijft een boost lopen zolang het net meer
-levert dan *Boost min. EMS-import* − 1 kW. Die 1 kW marge werkt net als de € 0,02 bij de
+levert dan *Boost min. EMS-vermogen* − 1 kW. Die 1 kW marge werkt net als de € 0,02 bij de
 prijs: korte schommelingen in het importvermogen beëindigen de boost niet.
+
+### Laadstroom regelen
+
+Balans meldt wel óf er een aFRR-sessie is, maar niet hoeveel vermogen: dat verandert binnen
+het kwartier van seconde tot seconde. Alleen bij dynamische import staat het geplande
+vermogen in de API. BEVCC regelt daarom niet op een getal uit de API, maar op wat het meet:
+tijdens een import houdt het EMS de netafname vast, dus alles wat de auto meer neemt, gaat
+van de thuisaccu af.
+
+Met **Laadstroom regelen** aan doet BEVCC tijdens een boost het volgende:
+
+- **Import**: de auto mag hebben wat hij nu laadt, plus wat er nu naar de thuisaccu gaat,
+  min 300 W marge. Laadt de thuisaccu met 4,5 kW (import 5 kW, huis 0,5 kW), dan wordt dat
+  (4.500 − 300) / (3 × 230 V) = 6 A. De thuisaccu laadt daarna nog net, in plaats van de
+  auto te voeden.
+- **Export**: de auto mag hebben wat hij nu laadt, plus wat er nog naar het net gaat, min de
+  grens waarop de boost stopt en 300 W marge. Houdt het EMS de teruglevering vast, dan geeft
+  dit gewoon de volle stroom; neemt de auto de teruglevering over, dan voorkomt dit dat de
+  auto stroom van het net neemt.
+- Afgerond naar beneden op hele ampère, met 230 V per fase en het aantal fasen waarop de
+  auto laadt (`sensor.bevcc_laadfasen`). Nooit onder de minimale stroom van EVCC (meestal
+  6 A) en nooit boven de maximale stroom die er voor de boost stond.
+- Omlaag gaat direct, omhoog pas bij 300 W extra ruimte. Zo springt de stroom niet heen en
+  weer als de meting rond een ampèregrens schommelt.
+- BEVCC zet de nieuwe waarde direct bij de start van de boost, en daarna als het doel
+  20 seconden stabiel anders is. Zo hebben EVCC, de auto en het EMS tijd om te reageren.
+- Na de boost (of als je de regeling uitzet) komt de oorspronkelijke maximale stroom terug,
+  met controle. Lukt dat niet binnen een minuut, dan volgt een melding en probeert BEVCC het
+  elke 5 minuten opnieuw.
+- **Handmatig gaat voor.** Staat de maximale stroom tijdens de boost op een andere waarde
+  dan BEVCC zette (door jou, of EVCC nam de waarde niet over), dan stopt BEVCC met regelen
+  tot de boost voorbij is en laat het die waarde staan.
+
+Daarnaast verandert de boost zelf een beetje:
+
+- Een boost bij import start alleen als de auto minstens op zijn minimale stroom kan laden
+  met wat er naar de thuisaccu gaat. Bij 3 fasen en 6 A is dat 4,14 kW (+ 300 W marge);
+  daaronder zou de thuisaccu ook op de laagste stroom ontladen.
+- Een boost stopt als de thuisaccu toch 2 minuten lang meer dan 1 kW ontlaadt: de import
+  dekt de auto dan niet meer, ook niet op de laagste stroom.
+
+EVCC bewaart de maximale stroom van een laadpunt: BEVCC wijzigt hem dus echt, niet alleen
+voor de huidige sessie. Tijdens een boost is dat de bedoeling; daarna zet BEVCC hem terug.
+Wil je in die tijd zelf de maximale stroom veranderen, doe dat dan na de boost.
+
+### Boost bij export
+
+Het Balans-EMS verkoopt soms stroom uit de thuisaccu voor een lage prijs. Dat kan BEVCC
+niet tegenhouden: het EMS is van Balans. BEVCC kan wel de auto laten laden zodra het EMS
+goedkoop terug levert, zodat je die stroom zelf gebruikt. Zet daarvoor **Boost bij export
+onder** op de kale prijs waarop of waaronder je dat wilt.
+
+De grens is **kaal**, omdat teruglevering ook kaal wordt betaald. Vergelijk hem met wat
+laden je later kost: met de standaardwaarden kost een kWh die je later afneemt tegen een
+kale prijs van € 0,15 all-in 0,15 × 1,21 + 0,13 = € 0,31.
+
+Een boost bij export start als het EMS minstens *Boost min. EMS-vermogen* uit de thuisaccu
+terug levert (de thuisaccu ontlaadt met meer dan 500 W), bij een aFRR-exportsessie direct
+en anders na 90 seconden, en de thuisaccu op of boven de ondergrens zit. Met **Export
+negeert accu-ondergrens** aan geldt die ondergrens niet: de auto laadt dan door tot het EMS
+stopt met terugleveren (bijvoorbeeld op zijn eigen minimum van de thuisaccu).
+
+Wat er gebeurt als de auto start, hangt af van het EMS:
+
+- **Het EMS houdt de teruglevering vast** (zoals het bij import de netafname vasthoudt):
+  de auto laadt dan uit de thuisaccu, en de teruglevering loopt door. De auto gebruikt dus
+  stroom die het EMS tegen een lage prijs zou kunnen verkopen, maar de verkoop zelf stopt
+  niet. De thuisaccu loopt sneller leeg.
+- **Het EMS houdt het ontlaadvermogen vast**: dan neemt de auto de teruglevering over en
+  zakt die. Zonder *Laadstroom regelen* gaat de auto dan stroom van het net nemen en stopt
+  de boost na 2 minuten. Met *Laadstroom regelen* krijgt de auto alleen wat er
+  teruggeleverd wordt, op een kleine rest na.
+
+Het logboek noemt bij elke boost het net, de thuisaccu en de auto, zodat je kunt zien wat
+jouw EMS doet.
+
+Let op:
+
+- Een prijspiek gaat ook hier voor: ligt de afnameprijs boven *Pauze boven* terwijl de auto
+  laadt, dan pauzeert BEVCC. Zet *Boost bij export onder* daarom onder *Pauze boven*
+  omgerekend naar kaal (de dashboardkaart toont die waarde in €/MWh).
+- Tijdens een aFRR-exportsessie kan de opregelprijs binnen het kwartier alleen nog
+  **stijgen**. Een lage minuutprijs kan dus aan het eind van het kwartier hoger uitvallen,
+  en dan heeft de auto stroom gebruikt die meer waard was.
+- Een dynamisch (day-ahead) exportplan heeft in de API (nog) geen eigen prijs. In zo'n
+  kwartier boost BEVCC daarom niet bij export.
 
 ### Robuust schakelen
 
@@ -404,7 +533,18 @@ standaardwaarden; tot die tijd doet BEVCC niets.
 | `binary_sensor.bevcc_prijspiek` | Prijs boven *Pauze boven* |
 | `binary_sensor.bevcc_ems_import` | Het EMS importeert al 90 seconden |
 | `binary_sensor.bevcc_goedkope_import` | Voorwaarden voor een boost |
-| `sensor.bevcc_doel` | Wat BEVCC nu wil: `geen`, `pauze` of `boost` |
+| `binary_sensor.bevcc_afrr_exportsessie` | Balans meldt een aFRR-exportsessie voor jouw EMS |
+| `binary_sensor.bevcc_dynamische_export` | Balans meldt een dynamisch (day-ahead) exportplan voor dit kwartier |
+| `sensor.bevcc_balans_exportprijs` | Kale exportprijs van Balans voor het lopende kwartier |
+| `sensor.bevcc_exportprijs` | Kale exportprijs voor een boost bij export (attribuut `bron`) |
+| `binary_sensor.bevcc_ems_export` | Het EMS levert al 90 seconden terug uit de thuisaccu |
+| `binary_sensor.bevcc_goedkope_export` | Voorwaarden voor een boost bij export |
+| `sensor.bevcc_doel` | Wat BEVCC nu wil: `geen`, `pauze` of `boost` (attribuut `reden`: `import` of `export`) |
+| `sensor.bevcc_laadstroom_doel` | Maximale laadstroom (A) die de regeling nu wil; alleen tijdens een boost met *Laadstroom regelen* aan |
+| `select.bevcc_evcc_max_laadstroom` | Doorgeefluik naar de maximale laadstroom van je laadpunt in EVCC |
+| `sensor.bevcc_min_laadstroom`, `sensor.bevcc_laadfasen` | Minimale laadstroom en aantal fasen van het laadpunt |
+| `input_text.bevcc_te_herstellen_stroom`, `input_text.bevcc_ingestelde_stroom` | De maximale laadstroom van vóór de boost, en wat BEVCC zelf zette (`handmatig` = iemand anders wijzigde hem) |
+| `automation.bevcc_laadstroomregeling` | De automatisering die de maximale laadstroom regelt en terugzet |
 | `input_select.bevcc_status` | Wat BEVCC gedaan heeft: `rust`, `pauze`, `boost` of `handmatig` (niet zelf wijzigen) |
 | `input_text.bevcc_te_herstellen_modus` | De modus die na een pauze terugkomt |
 | `select.bevcc_evcc_modus` | Doorgeefluik naar de EVCC-modus van je laadpunt |
@@ -426,8 +566,24 @@ moeten ook de andere namen uit [Vereisten](#vereisten) kloppen.
 geschiedenis naar *Goedkope import*. Veelvoorkomende oorzaken: de thuisaccu zit onder de
 ondergrens, *Boost bij* staat op *alleen aFRR* en er is geen aFRR-sessie (dynamische import
 telt dan niet mee), de import is
-kleiner dan *Boost min. EMS-import*, de prijs ligt net boven *Boost onder*, de vorige boost
+kleiner dan *Boost min. EMS-vermogen*, de prijs ligt net boven *Boost onder*, de vorige boost
 is minder dan 5 minuten geleden, of EVCC staat niet op Smart.
+
+**Er komt geen boost bij export.** Kijk in de geschiedenis naar *Goedkope export* en bij
+*Details* naar de exportprijs en de bron. Veelvoorkomende oorzaken: *Boost bij export
+onder* staat op het minimum (uit), de prijs ligt erboven (let op: de grens is kaal), de
+teruglevering is kleiner dan *Boost min. EMS-vermogen* of komt van zonnepanelen (de
+thuisaccu ontlaadt dan niet), de thuisaccu zit onder de ondergrens, het is een dynamisch
+exportplan, of EVCC staat niet op Smart.
+
+**Oranje balk "Laadstroom regelen staat aan, maar … bestaat niet".** De entiteit
+`select.<prefix>_<laadpunt>_max_current` van ha-evcc ontbreekt of is uitgeschakeld.
+Zet hem aan bij de entiteiten van het laadpunt. Zonder die entiteit boost BEVCC op vol
+vermogen, zoals zonder regeling.
+
+**Melding "maximale laadstroom niet teruggezet".** EVCC nam de oorspronkelijke waarde
+niet over. BEVCC probeert het elke 5 minuten opnieuw; je kunt hem ook zelf in EVCC
+terugzetten.
 
 **Er komt geen pauze.** Een pauze komt alleen als de auto echt laadt. Staat de auto
 aangesloten maar laadt hij niet, dan laat BEVCC EVCC met rust.
@@ -464,6 +620,12 @@ pauze, boost en vrijgave met prijs, bron, netvermogen en thuisaccu.
   *Dynamisch + aFRR* precies afrekent, staat niet in de API (zie [Dynamische (day-ahead)
   import](#dynamische-day-ahead-import)).
 - BEVCC stuurt één laadpunt.
+- *Laadstroom regelen* rekent met 230 V per fase en reageert in stappen van ongeveer een
+  halve minuut tot een minuut (BEVCC, EVCC en de auto). Korte pieken in het huisverbruik
+  kan de thuisaccu dus nog even opvangen. BEVCC wisselt geen fasen.
+- Hoe het EMS reageert als de auto laadt tijdens een teruglevering, is nog niet gemeten
+  (zie [Boost bij export](#boost-bij-export)). Een dynamisch exportplan heeft in de API
+  (nog) geen prijs; BEVCC boost dan niet bij export.
 - De energiebelasting is die van de eerste schijf (tot 10.000 kWh per jaar).
 - Getest met één opstelling: EVCC met een Alfen-laadpaal en een thuisbatterij met het
   Balans-EMS. Werkt het bij jou anders, [meld het](https://github.com/Freekers/BEVCC/issues).
