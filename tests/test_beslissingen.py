@@ -40,7 +40,7 @@ def base(**kw):
         "binary_sensor.bevcc_afrr_exportsessie": S(kw.get("exportsessie", "off")),
         "binary_sensor.bevcc_ems_export": S(kw.get("ems_export", "off")),
         "sensor.bevcc_exportprijs": S(kw.get("exportprijs", "unavailable")),
-        "input_number.bevcc_boost_export_onder": S(kw.get("export_grens", -0.5)),
+        "input_number.bevcc_boost_export_onder": S(kw.get("export_grens", 0)),
         "input_boolean.bevcc_boost_export_negeer_ondergrens": S(kw.get("negeer", "off")),
         # laadstroomregeling
         "input_boolean.bevcc_laadstroom_regelen": S(kw.get("regelen", "off")),
@@ -145,8 +145,10 @@ def test_ems_import():
     (dict(net=12500, accu=-11300, kaal=65, sessie="on"), "off", 60, False),  # prijs 0,21
     (dict(IMPORT, sessie="on"), "off", 4, False),                    # 5 min rust na een boost
     (dict(IMPORT, sessie="on"), "off", 6, True),                     # rust voorbij
-    (dict(IMPORT, sessie="on", ems="on", grens=-0.5), "off", 60, False),  # boost uit
-    (dict(net=12500, accu=-11300, kaal=-1000, sessie="on", grens=-0.5), "off", 60, False),  # uit = uit
+    (dict(IMPORT, sessie="on", ems="on", grens=0), "off", 60, False),     # boost uit
+    (dict(net=12500, accu=-11300, kaal=-1000, sessie="on", grens=0), "off", 60, False),  # uit = uit
+    (dict(net=12500, accu=-11300, kaal=-1000, sessie="on", grens=0), "on", 60, False),   # uitgezet: stoppen
+    (dict(net=12500, accu=-11300, kaal=-1000, sessie="on", grens=0.01), "off", 60, True),
     (dict(net=12500, accu=-11300, kaal=-1000, sessie="on"), "off", 60, True),  # negatieve prijs
     (dict(IMPORT, sessie="on", soc=36), "off", 60, False),           # onder de ondergrens
     (dict(IMPORT, sessie="on", soc=50), "off", 60, True),            # op de ondergrens
@@ -270,7 +272,7 @@ def test_ems_export():
     (dict(EXPORT, exportsessie="on"), "off", 60, True),              # aFRR-exportsessie: direct
     (dict(EXPORT), "off", 60, False),                                # geen sessie, < 90 s
     (dict(EXPORT, ems_export="on"), "off", 60, True),                # teruglevering >= 90 s
-    (dict(EXPORT, exportsessie="on", export_grens=-0.5), "off", 60, False),  # uit
+    (dict(EXPORT, exportsessie="on", export_grens=0), "off", 60, False),     # uit
     (dict(EXPORT, exportsessie="on", exportprijs=0.41), "off", 60, False),
     (dict(EXPORT, exportsessie="on", exportprijs=0.40), "off", 60, True),    # op de grens
     (dict(EXPORT, exportsessie="on", exportprijs="unavailable"), "off", 60, False),
@@ -300,7 +302,7 @@ def test_ems_export():
     (dict(EXPORT, soc=48.5), "on", 60, True),
     (dict(EXPORT, soc=47), "on", 60, False),
     (dict(EXPORT, soc=10, negeer="on"), "on", 60, True),
-    (dict(EXPORT, export_grens=-0.5), "on", 60, False),             # uitgezet tijdens de boost
+    (dict(EXPORT, export_grens=0), "on", 60, False),             # uitgezet tijdens de boost
 ])
 def test_goedkope_export(kw, this, leeftijd, verwacht):
     assert bs(GE, base(**kw), this, leeftijd) is verwacht

@@ -222,11 +222,11 @@ updates.
 | Instelling | Entiteit | Standaard | Betekenis |
 |---|---|---|---|
 | Pauze boven | `input_number.bevcc_pauze_boven` | € 0,35 | All-in prijs waarboven het laden pauzeert. |
-| Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op het minimum (− € 0,50) staat boost uit. |
+| Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op € 0,00 staat boost uit. |
 | Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + dynamisch*: ook tijdens dynamische (day-ahead) import. *aFRR + onbalans*: bij alle EMS-import, dus ook dynamisch. Zie [ontwerpkeuzes](#boost-bij-afrr-dynamisch-of-onbalans). |
 | Boost min. EMS-vermogen | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. Een boost bij export start pas als het net (met de auto) minstens deze waarde terugkrijgt. |
 | Accu-ondergrens | `input_number.bevcc_accu_ondergrens` | 50 % | Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder. |
-| Boost bij export onder | `input_number.bevcc_boost_export_onder` | uit (− € 0,50) | All-in exportprijs waarop of waaronder je de teruggeleverde stroom liever zelf gebruikt. Op het minimum (− € 0,50) staat boost bij export uit. Zie [Boost bij export](#boost-bij-export). |
+| Boost bij export onder | `input_number.bevcc_boost_export_onder` | uit (€ 0,00) | All-in exportprijs waarop of waaronder je de teruggeleverde stroom liever zelf gebruikt. Op € 0,00 staat boost bij export uit. Zie [Boost bij export](#boost-bij-export). |
 | Export negeert accu-ondergrens | `input_boolean.bevcc_boost_export_negeer_ondergrens` | uit | Aan: een boost bij export kijkt niet naar de *Accu-ondergrens*. De auto mag de thuisaccu dan leeg laden zolang het EMS terug levert. |
 | Laadstroom regelen | `input_boolean.bevcc_laadstroom_regelen` | uit | Aan: tijdens een boost past BEVCC de maximale laadstroom van EVCC aan. Zie [Laadstroom regelen](#laadstroom-regelen). |
 | Energiebelasting | `input_number.bevcc_energiebelasting` | € 0,11085 | Per kWh incl. btw, 2026, eerste schijf. **Elk jaar per 1 januari bijwerken.** |
@@ -595,7 +595,7 @@ is minder dan 5 minuten geleden, of EVCC staat niet op Smart.
 
 **Er komt geen boost bij export.** Kijk in de geschiedenis naar *Goedkope export* en bij
 *Details* naar de exportprijs en de bron. Veelvoorkomende oorzaken: *Boost bij export
-onder* staat op het minimum (uit), de prijs ligt erboven, de pauze gaat voor (de grens
+onder* staat op € 0,00 (uit), de prijs ligt erboven, de pauze gaat voor (de grens
 ligt boven *Pauze boven*), de
 teruglevering is kleiner dan *Boost min. EMS-vermogen* of komt van zonnepanelen (de
 thuisaccu ontlaadt dan niet), de thuisaccu zit onder de ondergrens, het is een dynamisch

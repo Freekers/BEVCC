@@ -115,8 +115,8 @@ def _markdown_kaarten(node):
 
 
 @pytest.mark.parametrize("boost_bij, grens, export, aan", [
-    ("alleen aFRR", 0.20, -0.5, "off"), ("aFRR + dynamisch", 0.20, -0.5, "off"), ("aFRR + onbalans", 0.20, -0.5, "off"),
-    ("alleen aFRR", -0.5, -0.5, "off"), ("alleen aFRR", 0.20, 0.30, "on"), ("alleen aFRR", 0.20, 0.40, "off"),
+    ("alleen aFRR", 0.20, 0, "off"), ("aFRR + dynamisch", 0.20, 0, "off"), ("aFRR + onbalans", 0.20, 0, "off"),
+    ("alleen aFRR", 0, 0, "off"), ("alleen aFRR", 0.20, 0.30, "on"), ("alleen aFRR", 0.20, 0.40, "off"),
 ])
 def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
     db = {

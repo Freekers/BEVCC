@@ -36,6 +36,10 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
 
 ### Gewijzigd
 
+- *Boost onder* staat nu uit op **€ 0,00** in plaats van − € 0,50; negatieve grenzen kunnen
+  niet meer. Stond hij op − € 0,50 (uit), dan staat hij na de update op € 0,00 (nog steeds
+  uit). Een andere negatieve waarde wordt ook € 0,00, dus uit: zet hem dan zelf weer op een
+  positieve waarde. *Boost bij export onder* werkt op dezelfde manier.
 - *Boost min. EMS-import* heet nu *Boost min. EMS-vermogen*: het geldt ook voor de start
   van een boost bij export. Entiteit en waarde blijven hetzelfde.
 - Het logboek noemt ook het laadvermogen van de auto.

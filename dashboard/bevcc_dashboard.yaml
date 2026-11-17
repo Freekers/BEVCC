@@ -19,24 +19,24 @@ cards:
       {% set door_import = '%g' | format([min_kw - 1, 0] | max) | replace('.', ',') %}
       {% set bij = states('input_select.bevcc_boost_bij') %}
       {% set bronnen = {'aFRR + dynamisch': 'aFRR-sessie of dynamische import'}.get(bij, 'aFRR-sessie') %}
-      {% set exp = states('input_number.bevcc_boost_export_onder') | float(-0.5) %}
+      {% set exp = states('input_number.bevcc_boost_export_onder') | float(0) %}
       {% set ep = states('sensor.bevcc_exportprijs') %}
       {% set negeer = is_state('input_boolean.bevcc_boost_export_negeer_ondergrens', 'on') %}
       {% set regelen = is_state('input_boolean.bevcc_laadstroom_regelen', 'on') %}
       ## {{ ('€ %.3f' | format(p | float) | replace('.', ',')) if is_number(p) else 'prijs onbekend' }} /kWh · {{ states('input_select.bevcc_status') }}
       Bron: **{{ states('sensor.bevcc_prijsbron') }}**{% if is_number(kaal) %} (kaal € {{ '%.3f' | format(kaal | float) | replace('.', ',') }}){% endif %}
       {% if is_number(balans) %} · Balans kwartierprijs € {{ '%.3f' | format(balans | float) | replace('.', ',') }}{% endif %}
-      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}{% if exp > -0.5 and is_number(ep) %} · exportprijs € {{ '%.3f' | format(ep | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% endif %}
+      {% if is_number(bp) and bp != p %} · boostprijs € {{ '%.3f' | format(bp | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_boostprijs', 'bron') }}){% endif %}{% if exp > 0 and is_number(ep) %} · exportprijs € {{ '%.3f' | format(ep | float) | replace('.', ',') }} ({{ state_attr('sensor.bevcc_exportprijs', 'bron') }}){% endif %}
 
       Pauze boven **€ {{ '%.2f' | format(cap) | replace('.', ',') }}** (≈ {{ ((cap - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal), alleen terwijl de auto laadt ·
-      {% if boost <= -0.5 %}boost staat **uit** (Boost onder op het minimum).
+      {% if boost <= 0 %}boost staat **uit** (Boost onder op € 0,00).
       {% else %}boost naar Snel onder **€ {{ '%.2f' | format(boost) | replace('.', ',') }}** (≈ {{ ((boost - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal)
       {% if bij == 'aFRR + onbalans' %}als het EMS ≥ {{ min_import }} kW importeert (direct bij een aFRR-sessie of dynamische import, anders na 90 s){% else %}tijdens een {{ bronnen }} van ≥ {{ min_import }} kW{% endif %}
       en de thuisaccu ≥ {{ vloer }} % is.
       Terug naar Smart bij € {{ '%.2f' | format(boost + 0.02) | replace('.', ',') }} of hoger,{% if bij != 'aFRR + onbalans' %} als de {{ bronnen }} eindigt,{% endif %} als het net onder {{ door_import }} kW zakt
       of als de thuisaccu onder {{ vloer - 2 }} % komt{% if regelen %} of 2 min lang meer dan 1 kW ontlaadt{% endif %}.{% endif %}
 
-      {% if exp > -0.5 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** (≈ {{ ((exp - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal) of minder
+      {% if exp > 0 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** (≈ {{ ((exp - vast) / 1.21 * 1000) | round(0) | int }} €/MWh kaal) of minder
       (direct bij een aFRR-exportsessie, anders na 90 s){% if negeer %}, ook onder de accu-ondergrens{% else %} en de thuisaccu is ≥ {{ vloer }} %{% endif %}.
       Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan 0,2 kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.{% if exp > cap %}
       Let op: boven *Pauze boven* (€ {{ '%.2f' | format(cap) | replace('.', ',') }}) gaat de pauze voor, als de auto laadt.{% endif %}
