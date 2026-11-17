@@ -126,9 +126,8 @@ input_number:
   # Houdt het EMS het netvermogen constant als de auto start, zet dit dan dicht
   # bij het laadvermogen van de auto, zodat de import de auto dekt (of zet
   # 'laadstroom regelen' aan).
-  # Bij een boost bij export geldt hetzelfde voor de teruglevering: minstens
-  # deze waarde zonder de auto om te starten, doorgaan zolang het net (met de
-  # auto) meer dan deze waarde - 1 kW terugkrijgt.
+  # Een boost bij export start pas als het net minstens deze waarde
+  # terugkrijgt (zie 'BEVCC goedkope export').
   bevcc_boost_min_import:
     name: "BEVCC boost minimaal EMS-vermogen"
     unit_of_measurement: "kW"
@@ -785,9 +784,11 @@ template:
                and now() - this.last_changed > timedelta(minutes=5) }}
           {% endif %}
 
-      # EMS levert terug: de thuisaccu ontlaadt en het net krijgt (zonder de
-      # auto) meer dan 'Boost min. EMS-vermogen'. Pas na 90 s aan, zodat korte
-      # pulsen zonder aFRR-exportsessie genegeerd worden.
+      # EMS levert terug: de thuisaccu ontlaadt en het net krijgt (met de auto)
+      # meer dan 'Boost min. EMS-vermogen'. Met de auto: buiten de handel dekt
+      # het EMS het verbruik van huis en auto uit de thuisaccu (net ~0); dat is
+      # geen teruglevering. Pas na 90 s aan, zodat korte pulsen zonder
+      # aFRR-exportsessie genegeerd worden.
       - name: "BEVCC EMS-export"
         unique_id: bevcc_ems_export
         icon: mdi:home-export-outline
@@ -796,26 +797,28 @@ template:
           {% set min_export = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
           {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
           {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
-          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
-          {{ accu > 500 and net - auto < - min_export }}
+          {{ accu > 500 and net < - min_export }}
 
       # Boost bij export: het EMS verkoopt stroom uit de thuisaccu voor een
       # kale prijs op of onder 'Boost bij export onder'; dan liever de auto
       # laden. Start als:
       #   - de exportprijs op of onder de grens ligt (grens -0,50 = uit),
-      #   - de thuisaccu met meer dan 500 W ontlaadt en het net (zonder de
-      #     auto) meer dan 'Boost min. EMS-vermogen' terugkrijgt,
+      #   - de thuisaccu met meer dan 500 W ontlaadt en het net (met de auto)
+      #     meer dan 'Boost min. EMS-vermogen' terugkrijgt,
       #   - Balans een aFRR-exportsessie meldt (direct), of de teruglevering al
       #     90 s duurt,
       #   - de thuisaccu op of boven de ondergrens zit (tenzij genegeerd), en
       #   - de vorige boost bij export 5 min geleden eindigde.
       # Doorgaan zolang de prijs op of onder de grens + 0,02 blijft, het net
-      # (met de auto) meer dan 'Boost min. EMS-vermogen' - 1 kW terugkrijgt
-      # (minimaal 0 kW), en de thuisaccu boven de ondergrens - 2 % blijft
-      # (tenzij genegeerd). Houdt het EMS de teruglevering vast als de auto
-      # start, dan laadt de auto uit de thuisaccu en loopt de teruglevering
-      # door; neemt de auto de teruglevering over, dan zakt die en stopt de
-      # boost (met 'laadstroom regelen' laat de regeling genoeg over).
+      # (met de auto) nog meer dan 200 W terugkrijgt, en de thuisaccu boven de
+      # ondergrens - 2 % blijft (tenzij genegeerd).
+      # Waarom 200 W: tijdens een teruglevering dekt de thuisaccu ook de auto,
+      # tot het maximum van de omvormer; daarboven gaat de auto ten koste van
+      # de teruglevering. Buiten de handel dekt het EMS de auto ook uit de
+      # thuisaccu, maar levert het niets terug. Op de meters is dat alleen te
+      # onderscheiden zolang er nog wat teruglevering over is; zakt die 2 min
+      # onder 200 W, dan stopt de boost (met 'laadstroom regelen' laat de
+      # regeling minstens 300 W over).
       # Tijdens een dynamisch exportplan is de prijs onbekend: geen boost.
       - name: "BEVCC goedkope export"
         unique_id: bevcc_goedkope_export
@@ -830,14 +833,13 @@ template:
           {% set soc = states('sensor.bevcc_thuisaccu_soc') | float(0) %}
           {% set net = states('sensor.bevcc_net_vermogen') | float(0) %}
           {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
-          {% set auto = states('sensor.bevcc_laadvermogen') | float(0) %}
           {% set sessie = is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') %}
           {% if this.state == 'on' %}
-            {{ grens > -0.5 and prijs <= grens + 0.02 and net < - ([min_export - 1000, 0] | max)
+            {{ grens > -0.5 and prijs <= grens + 0.02 and net < -200
                and (negeer or soc >= ondergrens - 2) }}
           {% else %}
             {{ grens > -0.5 and prijs <= grens and (negeer or soc >= ondergrens)
-               and accu > 500 and net - auto < - min_export
+               and accu > 500 and net < - min_export
                and (sessie or is_state('binary_sensor.bevcc_ems_export', 'on'))
                and now() - this.last_changed > timedelta(minutes=5) }}
           {% endif %}
@@ -877,11 +879,11 @@ template:
       #   import: wat er nu naar de thuisaccu gaat, min 300 W marge. Houdt het
       #           EMS de netafname vast, dan laadt de thuisaccu daardoor nog
       #           net, in plaats van de auto te voeden.
-      #   export: wat er nu nog naar het net gaat, min de grens waarop de boost
-      #           stopt ('Boost min. EMS-vermogen' - 1 kW) en 300 W marge.
-      #           Houdt het EMS de teruglevering vast, dan geeft dit de volle
-      #           stroom; neemt de auto de teruglevering over, dan voorkomt dit
-      #           afname van het net.
+      #   export: wat er nu nog naar het net gaat, min 300 W marge (net boven
+      #           de 200 W waarop de boost stopt). Zolang de thuisaccu onder
+      #           het maximum van de omvormer blijft, geeft dit de volle
+      #           stroom; daarboven neemt de auto de teruglevering over, op
+      #           300 W na (zie 'BEVCC goedkope export').
       # Afgerond naar beneden op hele ampère (230 V per fase), tussen de
       # minimale stroom van EVCC en de oorspronkelijke maximale stroom.
       # Omlaag direct, omhoog pas bij 300 W extra ruimte: zo springt de stroom
@@ -901,11 +903,10 @@ template:
           {% set export = is_state('binary_sensor.bevcc_goedkope_export', 'on')
                           and not is_state('binary_sensor.bevcc_goedkope_import', 'on') %}
           {% set meting = states('sensor.bevcc_net_vermogen' if export else 'sensor.bevcc_thuisaccu_vermogen') %}
-          {% set grens = [states('input_number.bevcc_boost_min_import') | float(2) * 1000 - 1000, 0] | max if export else 0 %}
           {% if is_state('input_select.bevcc_status', 'boost') and is_state('input_boolean.bevcc_laadstroom_regelen', 'on')
                 and is_number(meting) and max_a >= 1 %}
             {% set w = 230 * fasen %}
-            {% set beschikbaar = states('sensor.bevcc_laadvermogen') | float(0) - (meting | float) - grens - 300 %}
+            {% set beschikbaar = states('sensor.bevcc_laadvermogen') | float(0) - (meting | float) - 300 %}
             {% set huidig = states('select.bevcc_evcc_max_laadstroom') | float(0) %}
             {% set doel = (beschikbaar / w) | round(0, 'floor') %}
             {% if doel > huidig %}{% set doel = [huidig, ((beschikbaar - 300) / w) | round(0, 'floor')] | max %}{% endif %}

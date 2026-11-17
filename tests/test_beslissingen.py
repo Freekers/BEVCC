@@ -262,6 +262,8 @@ def test_ems_export():
     assert bs("BEVCC EMS-export", base(net=-8000, accu=8400))
     assert not bs("BEVCC EMS-export", base(net=-3000, accu=-200))   # zonne-energie, accu laadt
     assert not bs("BEVCC EMS-export", base(net=-1500, accu=1900))   # minder dan 2 kW
+    # buiten de handel dekt het EMS de auto uit de thuisaccu: geen teruglevering
+    assert not bs("BEVCC EMS-export", base(net=30, accu=10500, auto_kw=10))
 
 
 @pytest.mark.parametrize("kw, this, leeftijd, verwacht", [
@@ -278,13 +280,23 @@ def test_ems_export():
     (dict(EXPORT, exportsessie="on", accu=300), "off", 60, False),  # niet uit de thuisaccu
     (dict(EXPORT, exportsessie="on", net=-1500, accu=1900), "off", 60, False),  # < 2 kW
     (dict(EXPORT, exportsessie="on"), "off", 4, False),             # 5 min rust
-    # doorgaan. EMS houdt de teruglevering vast, auto 10 kW uit de thuisaccu:
+    # buiten de handel dekt het EMS de laadende auto (Smart) uit de thuisaccu: net ~0,
+    # geen teruglevering, dus geen start (ook niet met een aFRR-exportsessie)
+    (dict(net=50, accu=4700, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, False),
+    (dict(net=-1900, accu=6500, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, False),
+    (dict(net=-2100, accu=6700, auto_kw=4.14, exportprijs=0.10, export_grens=0.12, exportsessie="on"), "off", 60, True),
+    # doorgaan. Teruglevering 8 kW, omvormer niet vol: auto 10 kW extra uit de thuisaccu
     (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.13, export_grens=0.12), "on", 60, True),
     (dict(net=-8000, accu=18400, auto_kw=10, exportprijs=0.15, export_grens=0.12), "on", 60, False),
-    # auto neemt de teruglevering over: net -0,5 kW, grens 2 - 1 = 1 kW -> stoppen
-    (dict(net=-500, accu=8400, auto_kw=7.5, exportprijs=0.10, export_grens=0.12), "on", 60, False),
-    (dict(net=-500, accu=8400, auto_kw=7.5, exportprijs=0.10, export_grens=0.12, min_import=0.5), "on", 60, True),
-    (dict(net=200, accu=8400, auto_kw=8.2, exportprijs=0.10, export_grens=0.12, min_import=0.5), "on", 60, False),
+    # omvormer vol (12 kW), huis 0,5 kW, auto 10 kW: nog 1,5 kW teruglevering -> door
+    (dict(net=-1500, accu=12000, auto_kw=10, exportprijs=0.10, export_grens=0.12), "on", 60, True),
+    (dict(net=-300, accu=12000, auto_kw=11.2, exportprijs=0.10, export_grens=0.12), "on", 60, True),
+    # auto en huis vragen de hele omvormer (rest via de bypass van het net): niet meer
+    # te onderscheiden van het EMS dat de auto dekt -> stoppen (na 2 min)
+    (dict(net=500, accu=12000, auto_kw=11.5, exportprijs=0.10, export_grens=0.12), "on", 60, False),
+    (dict(net=-150, accu=11500, auto_kw=11, exportprijs=0.10, export_grens=0.12), "on", 60, False),
+    # EMS stopte met terugleveren en dekt de auto: net ~0 -> stoppen
+    (dict(net=20, accu=10500, auto_kw=10, exportprijs=0.10, export_grens=0.12), "on", 60, False),
     (dict(EXPORT, soc=48.5), "on", 60, True),
     (dict(EXPORT, soc=47), "on", 60, False),
     (dict(EXPORT, soc=10, negeer="on"), "on", 60, True),
@@ -362,13 +374,15 @@ def test_laadstroom_doel_import(kw, verwacht):
 
 
 @pytest.mark.parametrize("kw, verwacht", [
-    # teruglevering 8 kW, grens 2 - 1 = 1 kW, marge 0,3 kW: 6,7 kW -> 9 A
-    (dict(net=-8000, accu=8400), "9"),
-    # EMS houdt de teruglevering vast: de auto mag alles
+    # teruglevering 8 kW, marge 0,3 kW: 7,7 kW -> 11 A
+    (dict(net=-8000, accu=8400), "11"),
+    # EMS houdt de teruglevering vast, omvormer niet vol: de auto mag alles
     (dict(net=-8000, accu=18400, auto_kw=10), "16"),
-    # auto nam de teruglevering over: niet verder omhoog, net blijft op -1,3 kW
-    (dict(net=-1300, accu=8400, auto_kw=6.7), "9"),
-    (dict(net=-500, accu=8400, auto_kw=7.5), "9"),
+    # omvormer vol (12 kW), huis 0,5 kW, auto op 16 A = 11,04 kW: nog 0,46 kW
+    # teruglevering, meer dan de 0,3 kW marge -> blijft 16 A
+    (dict(net=-460, accu=12000, auto_kw=11.04), "16"),
+    # huis 1 kW: de auto zou van het net nemen -> 15 A
+    (dict(net=40, accu=12000, auto_kw=11.04), "15"),
 ])
 def test_laadstroom_doel_export(kw, verwacht):
     assert stroomdoel(goedkoop_import="off", goedkoop_export="on", **kw) == verwacht

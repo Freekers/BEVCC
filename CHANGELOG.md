@@ -22,7 +22,9 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
 - **Boost bij export** (`input_number.bevcc_boost_export_onder`, kaal): verkoopt het EMS
   stroom uit de thuisaccu voor deze prijs of minder, dan zet BEVCC EVCC op Snel zodat de
   auto die stroom krijgt. Met `input_boolean.bevcc_boost_export_negeer_ondergrens` geldt de
-  accu-ondergrens daarbij niet.
+  accu-ondergrens daarbij niet. De boost loopt door zolang het net nog meer dan 0,2 kW
+  terugkrijgt: buiten de handel dekt het EMS de auto ook uit de thuisaccu, en dat is alleen
+  van een teruglevering te onderscheiden zolang er iets teruggeleverd wordt.
 - Nieuwe entiteiten: `binary_sensor.bevcc_afrr_exportsessie`,
   `binary_sensor.bevcc_dynamische_export`, `sensor.bevcc_balans_exportprijs`,
   `sensor.bevcc_exportprijs`, `binary_sensor.bevcc_ems_export`,
@@ -33,8 +35,8 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
 
 ### Gewijzigd
 
-- *Boost min. EMS-import* heet nu *Boost min. EMS-vermogen*: het geldt ook voor de
-  teruglevering bij een boost bij export. Entiteit en waarde blijven hetzelfde.
+- *Boost min. EMS-import* heet nu *Boost min. EMS-vermogen*: het geldt ook voor de start
+  van een boost bij export. Entiteit en waarde blijven hetzelfde.
 - Het logboek noemt ook het laadvermogen van de auto.
 - *Standaardwaarden herstellen* zet ook de nieuwe instellingen uit.
 

@@ -38,7 +38,7 @@ cards:
 
       {% if exp > -0.5 %}Boost bij export: het EMS levert ≥ {{ min_import }} kW terug uit de thuisaccu voor **€ {{ '%.2f' | format(exp) | replace('.', ',') }}** kaal (≈ {{ (exp * 1000) | round(0) | int }} €/MWh) of minder
       (direct bij een aFRR-exportsessie, anders na 90 s){% if negeer %}, ook onder de accu-ondergrens{% else %} en de thuisaccu is ≥ {{ vloer }} %{% endif %}.
-      Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan {{ door_import }} kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.
+      Terug naar Smart boven € {{ '%.2f' | format(exp + 0.02) | replace('.', ',') }}, als het net minder dan 0,2 kW terugkrijgt{% if not negeer %} of als de thuisaccu onder {{ vloer - 2 }} % komt{% endif %}.
       {% else %}Boost bij export staat **uit**.{% endif %}
       {% if regelen %}Laadstroom geregeld: bij een boost op import krijgt de auto niet meer dan er naar de thuisaccu gaat, bij export niet meer dan er wordt teruggeleverd (op hele ampère).{% endif %}
 
