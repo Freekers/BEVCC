@@ -87,20 +87,39 @@ def test_github_repo_overal_gelijk():
     assert len(repos) == 1, repos
 
 
+def _acties(lijst):
+    """Alle acties, ook binnen if/then/else."""
+    for a in lijst:
+        yield a
+        for tak in ("then", "else"):
+            yield from _acties(a.get(tak, []))
+
+
 def test_standaardwaarden_binnen_grenzen():
-    acties = ha.automation("bevcc_standaardwaarden")["actions"]
+    automatisering = ha.automation("bevcc_standaardwaarden")
+    nieuw = automatisering["actions"][0]["then"]   # nieuwe installatie of herstellen
     gezet = set()
-    for a in acties:
+    for a in _acties(automatisering["actions"]):
+        if "action" not in a:
+            continue
         if a["action"] == "input_number.set_value":
             key = a["target"]["entity_id"].split(".", 1)[1]
             spec = ha.CFG["input_number"][key]
             assert spec["min"] <= a["data"]["value"] <= spec["max"], key
             assert "initial" not in spec, key
-            gezet.add(key)
+            if a in nieuw:
+                gezet.add(key)
         if a["action"] == "input_select.select_option":
             key = a["target"]["entity_id"].split(".", 1)[1]
             assert a["data"]["option"] in ha.CFG["input_select"][key]["options"]
     assert gezet == set(ha.CFG["input_number"]), "elke instelling krijgt een standaardwaarde"
+    # elke schakelaar (behalve de markering zelf) krijgt een standaardwaarde
+    schakelaars = set()
+    for a in nieuw:
+        if a.get("action") in ("input_boolean.turn_on", "input_boolean.turn_off"):
+            ids = a["target"]["entity_id"]
+            schakelaars |= {i.split(".", 1)[1] for i in ([ids] if isinstance(ids, str) else ids)}
+    assert schakelaars == set(ha.CFG["input_boolean"])
 
 
 def _markdown_kaarten(node):
@@ -115,11 +134,13 @@ def _markdown_kaarten(node):
 
 
 @pytest.mark.parametrize("boost_bij, grens, export, aan", [
-    ("alleen aFRR", 0.20, 0, "off"), ("aFRR + dynamisch", 0.20, 0, "off"), ("aFRR + onbalans", 0.20, 0, "off"),
-    ("alleen aFRR", 0, 0, "off"), ("alleen aFRR", 0.20, 0.30, "on"), ("alleen aFRR", 0.20, 0.40, "off"),
+    ("alleen aFRR", 0.20, 0.30, "off"), ("aFRR + dynamisch", 0.20, 0.30, "off"), ("aFRR + onbalans", 0.20, 0.30, "off"),
+    ("alleen aFRR", -0.05, 0.30, "off"), ("alleen aFRR", 0.20, 0.30, "on"), ("alleen aFRR", 0.20, -0.10, "on"),
 ])
 def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
     db = {
+        "input_boolean.bevcc_boost_import": S("on" if grens != 0.20 or aan == "on" else "off"),
+        "input_boolean.bevcc_boost_export": S(aan),
         "input_number.bevcc_boost_export_onder": S(export),
         "input_boolean.bevcc_boost_export_negeer_ondergrens": S(aan),
         "input_boolean.bevcc_laadstroom_regelen": S(aan),
@@ -154,6 +175,7 @@ def test_dashboard_templates_renderen(boost_bij, grens, export, aan):
 @pytest.mark.parametrize("export, waarschuwing", [(0.30, False), (0.35, False), (0.40, True)])
 def test_dashboard_waarschuwt_export_boven_pauze(export, waarschuwing):
     db = {
+        "input_boolean.bevcc_boost_export": S("on"),
         "input_number.bevcc_boost_export_onder": S(export),
         "input_number.bevcc_pauze_boven": S(0.35),
         "input_number.bevcc_energiebelasting": S(0.11085),
@@ -164,3 +186,19 @@ def test_dashboard_waarschuwt_export_boven_pauze(export, waarschuwing):
     assert ("gaat de pauze voor" in kop) is waarschuwing
     if export == 0.40:
         assert "€ 0,40** (≈ 222 €/MWh kaal)" in kop
+
+
+def test_dashboard_negatieve_grenzen():
+    db = {
+        "input_boolean.bevcc_boost_import": S("on"),
+        "input_boolean.bevcc_boost_export": S("on"),
+        "input_number.bevcc_boost_onder": S(-0.05),
+        "input_number.bevcc_boost_export_onder": S(-0.10),
+        "input_number.bevcc_pauze_boven": S(0.35),
+        "input_number.bevcc_energiebelasting": S(0.11085),
+        "input_number.bevcc_leverkosten": S(0.02),
+        "sensor.bevcc_afnameprijs": S(0.39088, {"kaal": 0.2149}),
+    }
+    kop = ha.render(ha.load_yaml(ha.DASHBOARD)["cards"][0]["content"], db)
+    assert "**€ -0,05** (≈ -149 €/MWh kaal; alleen als je betaald krijgt om af te nemen)" in kop
+    assert "**€ -0,10** (≈ -191 €/MWh kaal)" in kop

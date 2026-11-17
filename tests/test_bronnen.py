@@ -194,6 +194,13 @@ def test_tenergy_scraper_duizendtallen_en_negatief():
     assert scrape(html) == {"afnemen": 1234.56, "invoeden": -12.5, "tijd": "12:15"}
 
 
+def test_tenergy_scraper_unicode_minteken():
+    # Negatieve prijzen met een typografisch minteken (U+2212) of gedachtestreepje
+    html = (ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8")
+    html = html.replace(">214,90<", ">\u2212412,30<", 1).replace(">33,70<", ">\u20131.234,50<", 1)
+    assert scrape(html) == {"afnemen": -412.3, "invoeden": -1234.5, "tijd": "12:16"}
+
+
 @pytest.mark.parametrize("html", ["", "<html>onderhoud</html>"])
 def test_tenergy_scraper_leeg_bij_storing(html):
     assert scrape(html) == {}

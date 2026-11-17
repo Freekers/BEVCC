@@ -36,10 +36,18 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
 
 ### Gewijzigd
 
-- *Boost onder* staat nu uit op **€ 0,00** in plaats van − € 0,50; negatieve grenzen kunnen
-  niet meer. Stond hij op − € 0,50 (uit), dan staat hij na de update op € 0,00 (nog steeds
-  uit). Een andere negatieve waarde wordt ook € 0,00, dus uit: zet hem dan zelf weer op een
-  positieve waarde. *Boost bij export onder* werkt op dezelfde manier.
+- **Boost aan/uit met een schakelaar** (`input_boolean.bevcc_boost_import`,
+  `input_boolean.bevcc_boost_export`) in plaats van *Boost onder* op − € 0,50. Prijzen
+  kunnen negatief zijn (bij onbalans soms honderden euro's per MWh onder nul), dus elke
+  grens is een geldige prijs. *Boost onder* en *Boost bij export onder* mogen nu tot
+  − € 2,00 all-in: zo kun je bijvoorbeeld alleen boosten als je betaald krijgt om af te
+  nemen.
+- Bijwerken gaat vanzelf: na de herstart staat *Boost bij goedkope import* aan als boost in
+  1.3 aan stond (ook met een negatieve grens). Stond *Boost onder* op − € 0,50 (uit), dan
+  gaat de schakelaar uit en krijgt de grens weer € 0,20. Nieuwe instellingen krijgen voortaan
+  eenmalig een beginwaarde (`input_text.bevcc_instellingen_versie`).
+- De TenneT-tabel wordt ook gelezen als een negatieve prijs met een typografisch minteken
+  (−) staat.
 - *Boost min. EMS-import* heet nu *Boost min. EMS-vermogen*: het geldt ook voor de start
   van een boost bij export. Entiteit en waarde blijven hetzelfde.
 - Het logboek noemt ook het laadvermogen van de auto.

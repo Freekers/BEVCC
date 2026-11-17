@@ -222,11 +222,13 @@ updates.
 | Instelling | Entiteit | Standaard | Betekenis |
 |---|---|---|---|
 | Pauze boven | `input_number.bevcc_pauze_boven` | € 0,35 | All-in prijs waarboven het laden pauzeert. |
-| Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Op € 0,00 staat boost uit. |
+| Boost bij goedkope import | `input_boolean.bevcc_boost_import` | aan | Boost bij goedkope EMS-import aan of uit. |
+| Boost onder | `input_number.bevcc_boost_onder` | € 0,20 | All-in prijs waaronder een boost mag. Mag negatief zijn, tot − € 2,00: dan alleen als je betaald krijgt om af te nemen (zie [Negatieve prijzen](#negatieve-prijzen)). |
 | Boost bij | `input_select.bevcc_boost_bij` | alleen aFRR | *alleen aFRR*: alleen tijdens een aFRR-importsessie. *aFRR + dynamisch*: ook tijdens dynamische (day-ahead) import. *aFRR + onbalans*: bij alle EMS-import, dus ook dynamisch. Zie [ontwerpkeuzes](#boost-bij-afrr-dynamisch-of-onbalans). |
 | Boost min. EMS-vermogen | `input_number.bevcc_boost_min_import` | 2 kW | Netafname (zonder de auto) die nodig is om een boost te starten. Een boost stopt als de netafname (met de auto) 1 kW onder deze waarde zakt. Een boost bij export start pas als het net (met de auto) minstens deze waarde terugkrijgt. |
 | Accu-ondergrens | `input_number.bevcc_accu_ondergrens` | 50 % | Geen boost onder deze laadtoestand; een lopende boost stopt 2 % eronder. |
-| Boost bij export onder | `input_number.bevcc_boost_export_onder` | uit (€ 0,00) | All-in exportprijs waarop of waaronder je de teruggeleverde stroom liever zelf gebruikt. Op € 0,00 staat boost bij export uit. Zie [Boost bij export](#boost-bij-export). |
+| Boost bij goedkope export | `input_boolean.bevcc_boost_export` | uit | Boost bij export aan of uit. Zie [Boost bij export](#boost-bij-export). |
+| Boost bij export onder | `input_number.bevcc_boost_export_onder` | € 0,30 | All-in exportprijs waarop of waaronder je de teruggeleverde stroom liever zelf gebruikt. Mag negatief zijn, tot − € 2,00. |
 | Export negeert accu-ondergrens | `input_boolean.bevcc_boost_export_negeer_ondergrens` | uit | Aan: een boost bij export kijkt niet naar de *Accu-ondergrens*. De auto mag de thuisaccu dan leeg laden zolang het EMS terug levert. |
 | Laadstroom regelen | `input_boolean.bevcc_laadstroom_regelen` | uit | Aan: tijdens een boost past BEVCC de maximale laadstroom van EVCC aan. Zie [Laadstroom regelen](#laadstroom-regelen). |
 | Energiebelasting | `input_number.bevcc_energiebelasting` | € 0,11085 | Per kWh incl. btw, 2026, eerste schijf. **Elk jaar per 1 januari bijwerken.** |
@@ -277,6 +279,37 @@ alleen vanuit Smart.
 
 Laadplannen in EVCC blijven werken zolang BEVCC niet pauzeert of boost, maar BEVCC houdt
 er geen rekening mee: een pauze gaat ook door als het plan daardoor niet gehaald wordt.
+
+### Negatieve prijzen
+
+Stroomprijzen kunnen negatief worden, en bij Balans gebeurt dat vaker en dieper dan bij een
+gewoon dynamisch contract:
+
+- **Day-ahead**: in 2026 was de kale day-aheadprijs tot half november zo'n 400 uur negatief
+  (in 2025 bijna 600 uur), met als laagste waarde ongeveer de marktgrens van −500 €/MWh.
+- **Onbalans**: Balans rekent af tegen de onbalansprijs. Tijdens afregelen (een overschot
+  op het net, en precies wanneer het EMS goedkoop importeert) zakt die vaak veel verder,
+  tot honderden en soms duizenden euro's per MWh onder nul.
+
+De **all-in** prijs komt pas onder nul als de kale prijs onder ongeveer −108 €/MWh zakt
+(met de standaardwaarden: (0 − 0,02 − 0,11085) / 1,21). Energiebelasting en leverkosten
+betaal je ook bij een negatieve prijs. Op de day-aheadmarkt gebeurde dat in 2026 maar zo'n
+12 uur; bij onbalansprijzen veel vaker.
+
+Wat BEVCC daarmee doet:
+
+- **Alle prijzen mogen negatief zijn.** De bronnen (Balans-API, TenneT-tabel) en de
+  berekening van de all-in prijs werken met negatieve getallen. De TenneT-tabel wordt ook
+  gelezen als een negatieve prijs met een typografisch minteken (−) staat.
+- **Boostgrenzen mogen negatief zijn**, tot − € 2,00 all-in (ongeveer −1.760 €/MWh kaal).
+  Zet je *Boost onder* op bijvoorbeeld − € 0,05, dan boost BEVCC alleen als je echt
+  betaald krijgt om af te nemen. Met een positieve grens boost BEVCC natuurlijk ook bij
+  elke negatieve prijs.
+- **Aan en uit met een schakelaar.** Omdat elke grens een geldige prijs is, ook nul of
+  negatief, hebben beide boosts een eigen schakelaar (*Boost bij goedkope import* en
+  *Boost bij goedkope export*), in plaats van een speciale waarde die 'uit' betekent.
+- **Pauze**: *Pauze boven* blijft positief (minimaal € 0,10); bij een negatieve prijs
+  pauzeert BEVCC nooit.
 
 ### Live minuutprijs in plaats van de kwartierprijs
 
@@ -542,6 +575,15 @@ De instellingen hebben bewust geen vaste beginwaarde in het package (anders zoud
 elke herstart terugspringen). Een eigen automatisering zet ze eenmalig op de
 standaardwaarden; tot die tijd doet BEVCC niets.
 
+Komen er in een update nieuwe instellingen bij, dan geeft dezelfde automatisering alleen
+die een beginwaarde, eenmalig na de herstart (bijgehouden in
+`input_text.bevcc_instellingen_versie`). Je eigen instellingen blijven staan. Bij de update
+naar 1.4 gaat het zo:
+
+- *Boost bij goedkope import* gaat aan als boost in 1.3 aan stond. Stond *Boost onder* op
+  − € 0,50 (het oude 'uit'), dan gaat de schakelaar uit en krijgt de grens weer € 0,20.
+- *Boost bij goedkope export* staat uit, met een grens van € 0,30.
+
 ## Entiteiten
 
 | Entiteit | Wat |
@@ -571,6 +613,8 @@ standaardwaarden; tot die tijd doet BEVCC niets.
 | `automation.bevcc_laadstroomregeling` | De automatisering die de maximale laadstroom regelt en terugzet |
 | `input_select.bevcc_status` | Wat BEVCC gedaan heeft: `rust`, `pauze`, `boost` of `handmatig` (niet zelf wijzigen) |
 | `input_text.bevcc_te_herstellen_modus` | De modus die na een pauze terugkomt |
+| `input_boolean.bevcc_boost_import`, `input_boolean.bevcc_boost_export` | Boost bij goedkope import of export aan/uit |
+| `input_text.bevcc_instellingen_versie` | Welke nieuwe instellingen na een update al een beginwaarde kregen (beheerd door BEVCC) |
 | `select.bevcc_evcc_modus` | Doorgeefluik naar de EVCC-modus van je laadpunt |
 | `sensor.bevcc_net_vermogen`, `sensor.bevcc_thuisaccu_vermogen`, `sensor.bevcc_laadvermogen`, `sensor.bevcc_thuisaccu_soc`, `binary_sensor.bevcc_auto_aangesloten`, `binary_sensor.bevcc_auto_laadt` | EVCC-waarden in watt, met vaste tekens (net + = afname, thuisaccu + = ontladen) |
 | `automation.bevcc_prijssturing` | De automatisering die de modus zet; uitzetten = BEVCC uit |
@@ -588,14 +632,15 @@ moeten ook de andere namen uit [Vereisten](#vereisten) kloppen.
 
 **Er komt geen boost.** Kijk op de kaart bij *Details* naar *Doel op dit moment* en in de
 geschiedenis naar *Goedkope import*. Veelvoorkomende oorzaken: de thuisaccu zit onder de
-ondergrens, *Boost bij* staat op *alleen aFRR* en er is geen aFRR-sessie (dynamische import
+ondergrens, *Boost bij goedkope import* staat uit, *Boost bij* staat op *alleen aFRR* en er
+is geen aFRR-sessie (dynamische import
 telt dan niet mee), de import is
 kleiner dan *Boost min. EMS-vermogen*, de prijs ligt net boven *Boost onder*, de vorige boost
 is minder dan 5 minuten geleden, of EVCC staat niet op Smart.
 
 **Er komt geen boost bij export.** Kijk in de geschiedenis naar *Goedkope export* en bij
-*Details* naar de exportprijs en de bron. Veelvoorkomende oorzaken: *Boost bij export
-onder* staat op € 0,00 (uit), de prijs ligt erboven, de pauze gaat voor (de grens
+*Details* naar de exportprijs en de bron. Veelvoorkomende oorzaken: *Boost bij goedkope
+export* staat uit, de prijs ligt boven *Boost bij export onder*, de pauze gaat voor (de grens
 ligt boven *Pauze boven*), de
 teruglevering is kleiner dan *Boost min. EMS-vermogen* of komt van zonnepanelen (de
 thuisaccu ontlaadt dan niet), de thuisaccu zit onder de ondergrens, het is een dynamisch

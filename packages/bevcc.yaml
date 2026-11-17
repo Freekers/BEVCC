@@ -88,6 +88,14 @@ input_text:
     name: "BEVCC ingestelde max. laadstroom"
     icon: mdi:current-ac
     max: 16
+  # Versie van de instellingen (niet van BEVCC), beheerd door 'BEVCC
+  # standaardwaarden': welke nieuwe instellingen al een beginwaarde kregen.
+  #   leeg  = van voor 1.4
+  #   2     = sinds 1.4 (aan/uit-schakelaars voor boost, negatieve grenzen)
+  bevcc_instellingen_versie:
+    name: "BEVCC versie van de instellingen"
+    icon: mdi:numeric
+    max: 8
 
 # Geen 'initial': wijzigingen via het dashboard blijven bewaard, ook bij
 # updates. Standaardwaarden zet de automatisering 'BEVCC standaardwaarden'
@@ -101,23 +109,25 @@ input_number:
     step: 0.01
     mode: box
     icon: mdi:cash-lock
-  # 0,00 (minimum) = boost uit
+  # Mag negatief zijn: de all-in prijs komt onder nul als de kale prijs
+  # onder ongeveer -108 EUR/MWh zakt (onbalans: vaak tijdens afregelen).
+  # Aan/uit met input_boolean.bevcc_boost_import.
   bevcc_boost_onder:
     name: "BEVCC boost onder (all-in)"
     unit_of_measurement: "EUR/kWh"
-    min: 0.00
+    min: -2.00
     max: 0.50
     step: 0.01
     mode: box
     icon: mdi:cash-fast
   # All-in exportprijs (wat het EMS voor teruggeleverde stroom krijgt,
   # omgerekend met dezelfde formule als de afnameprijs) waarop of waaronder
-  # BEVCC de auto laat laden van de thuisaccu in plaats van te verkopen.
-  # 0,00 (minimum, standaard) = uit.
+  # BEVCC de auto laat laden van de thuisaccu in plaats van te verkopen. Mag
+  # negatief zijn. Aan/uit met input_boolean.bevcc_boost_export.
   bevcc_boost_export_onder:
     name: "BEVCC boost bij export onder (all-in)"
     unit_of_measurement: "EUR/kWh"
-    min: 0.00
+    min: -2.00
     max: 1.50
     step: 0.01
     mode: box
@@ -199,6 +209,14 @@ input_boolean:
   bevcc_standaardwaarden:
     name: "BEVCC standaardwaarden ingesteld"
     icon: mdi:restore
+  # Boost aan/uit. Los van de grenzen, omdat elke grens (ook een negatieve)
+  # een geldige prijs is. Standaard: boost bij import aan, bij export uit.
+  bevcc_boost_import:
+    name: "BEVCC boost bij goedkope import"
+    icon: mdi:transmission-tower-import
+  bevcc_boost_export:
+    name: "BEVCC boost bij goedkope export"
+    icon: mdi:transmission-tower-export
   # Aan = tijdens een boost de maximale laadstroom van EVCC regelen, zodat de
   # auto (bij import) niet meer neemt dan er naar de thuisaccu gaat. Na de
   # boost komt de oorspronkelijke waarde terug. Standaard uit.
@@ -423,7 +441,7 @@ command_line:
         h = sys.stdin.read()
         m = re.search(r'(<table[^>]*>.*?Invoeden.*?Afnemen.*?</table>)', h, flags=re.S | re.I)
         t = m.group(1) if m else h
-        clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(s))).strip()
+        clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(s))).strip().replace('\u2212', '-').replace('\u2013', '-')
         num = r'-?\d[\d,\.]*'
         norm = lambda n: float(n.replace('.', '').replace(',', '.'))
         rows = re.findall(r'<tr[^>]*>.*?</tr>', t, flags=re.S | re.I)
@@ -762,14 +780,16 @@ template:
       # 2 min uitstelvertraging tegen korte dips, 5 min rust na een boost (de boost
       # verandert zelf de vermogens die hier gemeten worden; zonder rust kan hij
       # blijven aan- en uitgaan).
-      # Prijs onbekend -> geen boost. 'Boost onder' op 0,00 (minimum) -> nooit,
-      # ook niet bij een negatieve prijs, en een lopende boost stopt.
+      # Prijs onbekend -> geen boost. 'Boost bij goedkope import' uit -> geen
+      # boost, en een lopende boost stopt (na 2 min). 'Boost onder' mag
+      # negatief zijn: alleen boosten als je betaald krijgt om af te nemen.
       - name: "BEVCC goedkope import"
         unique_id: bevcc_goedkope_import
         icon: mdi:transmission-tower-import
         delay_off: "00:02:00"
         state: >-
           {% set prijs = states('sensor.bevcc_boostprijs') | float(99) %}
+          {% set aan = is_state('input_boolean.bevcc_boost_import', 'on') %}
           {% set grens = states('input_number.bevcc_boost_onder') | float(0.20) %}
           {% set min_import = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
           {% set ondergrens = states('input_number.bevcc_accu_ondergrens') | float(0) %}
@@ -788,11 +808,11 @@ template:
           {% set min_laden = [states('sensor.bevcc_min_laadstroom') | float(6), 1] | max * 230
                              * states('sensor.bevcc_laadfasen') | int(3) %}
           {% if this.state == 'on' %}
-            {{ grens > 0 and prijs < grens + 0.02 and net > [min_import - 1000, 0] | max
+            {{ aan and prijs < grens + 0.02 and net > [min_import - 1000, 0] | max
                and soc >= ondergrens - 2 and (sessie or dynamisch or ook_onbalans)
                and (not regelen or accu <= 1000) }}
           {% else %}
-            {{ grens > 0 and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
+            {{ aan and prijs < grens and soc >= ondergrens and accu < -500 and net - auto > min_import
                and (sessie or dynamisch or (ook_onbalans and is_state('binary_sensor.bevcc_ems_import', 'on')))
                and (not regelen or auto - accu - 300 >= min_laden)
                and now() - this.last_changed > timedelta(minutes=5) }}
@@ -816,7 +836,8 @@ template:
       # Boost bij export: het EMS verkoopt stroom uit de thuisaccu voor een
       # all-in prijs op of onder 'Boost bij export onder'; dan liever de auto
       # laden. Start als:
-      #   - de exportprijs op of onder de grens ligt (grens 0,00 = uit),
+      #   - 'Boost bij goedkope export' aan staat en de exportprijs op of
+      #     onder de grens ligt (de grens mag negatief zijn),
       #   - de thuisaccu met meer dan 500 W ontlaadt en het net (met de auto)
       #     meer dan 'Boost min. EMS-vermogen' terugkrijgt,
       #   - Balans een aFRR-exportsessie meldt (direct), of de teruglevering al
@@ -840,7 +861,8 @@ template:
         delay_off: "00:02:00"
         state: >-
           {% set prijs = states('sensor.bevcc_exportprijs') | float(99) %}
-          {% set grens = states('input_number.bevcc_boost_export_onder') | float(0) %}
+          {% set aan = is_state('input_boolean.bevcc_boost_export', 'on') %}
+          {% set grens = states('input_number.bevcc_boost_export_onder') | float(0.30) %}
           {% set min_export = states('input_number.bevcc_boost_min_import') | float(2) * 1000 %}
           {% set negeer = is_state('input_boolean.bevcc_boost_export_negeer_ondergrens', 'on') %}
           {% set ondergrens = states('input_number.bevcc_accu_ondergrens') | float(0) %}
@@ -849,10 +871,10 @@ template:
           {% set accu = states('sensor.bevcc_thuisaccu_vermogen') | float(0) %}
           {% set sessie = is_state('binary_sensor.bevcc_afrr_exportsessie', 'on') %}
           {% if this.state == 'on' %}
-            {{ grens > 0 and prijs <= grens + 0.02 and net < -200
+            {{ aan and prijs <= grens + 0.02 and net < -200
                and (negeer or soc >= ondergrens - 2) }}
           {% else %}
-            {{ grens > 0 and prijs <= grens and (negeer or soc >= ondergrens)
+            {{ aan and prijs <= grens and (negeer or soc >= ondergrens)
                and accu > 500 and net < - min_export
                and (sessie or is_state('binary_sensor.bevcc_ems_export', 'on'))
                and now() - this.last_changed > timedelta(minutes=5) }}
@@ -1401,6 +1423,8 @@ automation:
 
   # Standaardwaarden: eenmalig na installatie, of opnieuw door
   # 'BEVCC standaardwaarden ingesteld' uit te zetten.
+  # Na een update krijgen alleen nieuwe instellingen een beginwaarde (zie
+  # input_text.bevcc_instellingen_versie); je eigen instellingen blijven staan.
   - id: bevcc_standaardwaarden
     alias: "BEVCC standaardwaarden"
     mode: single
@@ -1414,63 +1438,115 @@ automation:
         entity_id: input_boolean.bevcc_standaardwaarden
         to: "off"
     conditions:
-      - condition: state
-        entity_id: input_boolean.bevcc_standaardwaarden
-        state: "off"
+      - "{{ not is_state('input_boolean.bevcc_standaardwaarden', 'on')
+            or states('input_text.bevcc_instellingen_versie') | int(0) < 2 }}"
     actions:
-      - action: input_number.set_value
+      - if:
+          - condition: state
+            entity_id: input_boolean.bevcc_standaardwaarden
+            state: "off"
+        # Nieuwe installatie of herstellen: alles op de standaardwaarden
+        then:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_pauze_boven
+            data:
+              value: 0.35
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_boost_onder
+            data:
+              value: 0.20
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_boost_min_import
+            data:
+              value: 2
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_accu_ondergrens
+            data:
+              value: 50
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_energiebelasting
+            data:
+              value: 0.11085
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_leverkosten
+            data:
+              value: 0.02
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.bevcc_boost_export_onder
+            data:
+              value: 0.30
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.bevcc_boost_bij
+            data:
+              option: alleen aFRR
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.bevcc_boost_import
+          - action: input_boolean.turn_off
+            target:
+              entity_id:
+                - input_boolean.bevcc_boost_export
+                - input_boolean.bevcc_laadstroom_regelen
+                - input_boolean.bevcc_boost_export_negeer_ondergrens
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.bevcc_standaardwaarden
+          - action: logbook.log
+            data:
+              name: BEVCC
+              message: "Standaardwaarden ingesteld"
+              entity_id: input_boolean.bevcc_standaardwaarden
+        # Bijwerken van voor 1.4: boost had geen schakelaar, en 'Boost onder' op
+        # -0,50 (het oude minimum) betekende uit. Wie boost aan had, houdt hem aan
+        # met dezelfde grens. 'Boost bij export onder' is nieuw (alleen wie een
+        # testversie gebruikte, kan al een positieve grens hebben).
+        else:
+          - variables:
+              import_aan: "{{ states('input_number.bevcc_boost_onder') | float(0.20) > -0.5 }}"
+              export_aan: "{{ states('input_number.bevcc_boost_export_onder') | float(-2) > 0 }}"
+          - action: "input_boolean.turn_{{ 'on' if import_aan else 'off' }}"
+            target:
+              entity_id: input_boolean.bevcc_boost_import
+          - action: "input_boolean.turn_{{ 'on' if export_aan else 'off' }}"
+            target:
+              entity_id: input_boolean.bevcc_boost_export
+          - if:
+              - "{{ not import_aan }}"
+            then:
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.bevcc_boost_onder
+                data:
+                  value: 0.20
+          - if:
+              - "{{ not export_aan }}"
+            then:
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.bevcc_boost_export_onder
+                data:
+                  value: 0.30
+          - action: logbook.log
+            data:
+              name: BEVCC
+              message: >-
+                Instellingen bijgewerkt voor BEVCC 1.4: boost bij goedkope import
+                {{ 'aan' if import_aan else 'uit' }}, boost bij goedkope export
+                {{ 'aan' if export_aan else 'uit' }}
+              entity_id: input_boolean.bevcc_standaardwaarden
+      - action: input_text.set_value
         target:
-          entity_id: input_number.bevcc_pauze_boven
+          entity_id: input_text.bevcc_instellingen_versie
         data:
-          value: 0.35
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_boost_onder
-        data:
-          value: 0.20
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_boost_min_import
-        data:
-          value: 2
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_accu_ondergrens
-        data:
-          value: 50
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_energiebelasting
-        data:
-          value: 0.11085
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_leverkosten
-        data:
-          value: 0.02
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.bevcc_boost_export_onder
-        data:
-          value: 0
-      - action: input_select.select_option
-        target:
-          entity_id: input_select.bevcc_boost_bij
-        data:
-          option: alleen aFRR
-      - action: input_boolean.turn_off
-        target:
-          entity_id:
-            - input_boolean.bevcc_laadstroom_regelen
-            - input_boolean.bevcc_boost_export_negeer_ondergrens
-      - action: input_boolean.turn_on
-        target:
-          entity_id: input_boolean.bevcc_standaardwaarden
-      - action: logbook.log
-        data:
-          name: BEVCC
-          message: "Standaardwaarden ingesteld"
-          entity_id: input_boolean.bevcc_standaardwaarden
+          value: "2"
 
   # Balans-API onbereikbaar (meestal een verlopen sessiecookie)
   - id: bevcc_balans_api_bewaking
