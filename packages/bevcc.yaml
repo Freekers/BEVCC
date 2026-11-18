@@ -453,12 +453,15 @@ rest:
 
 command_line:
   # TenneT-onbalansprijzen per minuut (EUR/MWh), via services.tenergy.nl.
-  # Toestand = 'Afnemen'; attributen afnemen, invoeden en tijd (HH:MM).
-  # Verouderd = niet beschikbaar: is de nieuwste regel meer dan 10 minuten
+  # Toestand = 'Afnemen'; attributen afnemen, invoeden, tijdstip (ms sinds
+  # 1970), tijd (HH:MM, Nederlandse tijd) en bron.
+  # Gelezen uit de grafiekdata op de pagina (minuutwaarden met tijdstempel,
+  # ~1,5 dag terug); lukt dat niet, dan uit de tabel (tijd HH:MM). Tenergy
+  # zet soms een vooruitgeschoven laatste punt neer; punten meer dan 1 min in
+  # de toekomst tellen niet.
+  # Verouderd = niet beschikbaar: is de nieuwste minuut meer dan 10 minuten
   # oud (de pagina loopt normaal ~2 min achter), dan rekent BEVCC er niet
-  # mee. 'tijd' is Nederlandse tijd; Home Assistant moet dus in de tijdzone
-  # Europe/Amsterdam staan. Tot 5 min 'in de toekomst' (klokverschil) telt
-  # als actueel; rond middernacht rekent de modulo door.
+  # mee. Tot 5 min 'in de toekomst' (klokverschil) telt als actueel.
   - sensor:
       name: "BEVCC TenneT onbalans"
       unique_id: bevcc_tennet_onbalans
@@ -468,30 +471,60 @@ command_line:
       command_timeout: 30
       command: |
         curl -fsS --max-time 20 'https://services.tenergy.nl/public.aspx/actualimbalanceprices' | python3 -c "
-        import sys, re, html, json
+        import sys, re, html, json, time
+        from datetime import datetime, timedelta, timezone
         h = sys.stdin.read()
-        m = re.search(r'(<table[^>]*>.*?Invoeden.*?Afnemen.*?</table>)', h, flags=re.S | re.I)
-        t = m.group(1) if m else h
-        clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(s))).strip().replace('\u2212', '-').replace('\u2013', '-')
-        num = r'-?\d[\d,\.]*'
-        norm = lambda n: float(n.replace('.', '').replace(',', '.'))
-        rows = re.findall(r'<tr[^>]*>.*?</tr>', t, flags=re.S | re.I)
-        data = [[clean(c) for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', r, flags=re.S | re.I)] for r in rows]
-        valid = [r for r in data if len(r) >= 9 and re.fullmatch(num, r[-1]) and re.fullmatch(num, r[-2]) and re.fullmatch(r'\d{1,2}:\d{2}', r[2])]
-        print(json.dumps({'afnemen': norm(valid[0][-1]), 'invoeden': norm(valid[0][-2]), 'tijd': valid[0][2]}) if valid else '{}')
+        nu = time.time() * 1000
+        try:
+            from zoneinfo import ZoneInfo
+            nl = ZoneInfo('Europe/Amsterdam')
+        except Exception:
+            nl = None
+        uit = {}
+        try:
+            g = json.loads(re.search(r'data\s*=\s*(\{[\s\S]*?\})\s*;\s*serialChart\.updateChart', h).group(1))
+            def reeks(i):
+                s = [x for x in g['ChartSeries'] if x.get('Id') == i][0]
+                return {int(re.search(r'-?\d+', str(p['Key'])).group()): float(p['Value']) for p in s['Data'] if isinstance(p.get('Value'), (int, float))}
+            a, v = reeks('PRICES_TAKE'), reeks('PRICES_FEED')
+            t = max(k for k in a if k in v and k % 60000 == 0 and k <= nu + 60000)
+            uit = {'afnemen': a[t], 'invoeden': v[t], 'tijdstip': t, 'bron': 'grafiek'}
+        except Exception:
+            uit = {}
+        if not uit:
+            m = re.search(r'(<table[^>]*>.*?Invoeden.*?Afnemen.*?</table>)', h, flags=re.S | re.I)
+            t = m.group(1) if m else h
+            clean = lambda s: re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(s))).strip().replace('−', '-').replace('–', '-')
+            num = r'-?\d[\d,\.]*'
+            norm = lambda n: float(n.replace('.', '').replace(',', '.'))
+            rows = re.findall(r'<tr[^>]*>.*?</tr>', t, flags=re.S | re.I)
+            data = [[clean(c) for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', r, flags=re.S | re.I)] for r in rows]
+            valid = [r for r in data if len(r) >= 9 and re.fullmatch(num, r[-1]) and re.fullmatch(num, r[-2]) and re.fullmatch(r'\d{1,2}:\d{2}', r[2])]
+            if valid:
+                uit = {'afnemen': norm(valid[0][-1]), 'invoeden': norm(valid[0][-2]), 'tijdstip': None, 'tijd': valid[0][2], 'bron': 'tabel'}
+                if nl:
+                    hh, mm = map(int, valid[0][2].split(':'))
+                    n = datetime.now(nl)
+                    d = n.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                    if d > n + timedelta(minutes=5):
+                        d -= timedelta(days=1)
+                    uit['tijdstip'] = int(d.timestamp() * 1000)
+        if uit.get('tijdstip') is not None:
+            uit['tijd'] = datetime.fromtimestamp(uit['tijdstip'] / 1000, nl or timezone.utc).strftime('%H:%M')
+        print(json.dumps(uit))
         "
       availability: >-
-        {% set ok = value_json is defined and value_json is mapping and value_json.get('afnemen') is number %}
-        {% set delen = ((value_json.get('tijd') or '') | string).split(':') if ok else [] %}
-        {% if delen | count == 2 and delen[0] | int(-1) >= 0 and delen[1] | int(-1) >= 0 %}
-          {% set leeftijd = (now().hour * 60 + now().minute - (delen[0] | int) * 60 - (delen[1] | int)) % 1440 %}
-          {{ leeftijd <= 10 or leeftijd >= 1435 }}
-        {% else %}false{% endif %}
+        {% set ok = value_json is defined and value_json is mapping and value_json.get('afnemen') is number
+                    and value_json.get('tijdstip') is number %}
+        {% set leeftijd = (as_timestamp(now()) * 1000 - value_json.get('tijdstip')) / 60000 if ok else 0 %}
+        {{ ok and -5 <= leeftijd <= 10 }}
       value_template: "{{ value_json.afnemen }}"
       json_attributes:
         - afnemen
         - invoeden
+        - tijdstip
         - tijd
+        - bron
 
 template:
   # ---------------------------------------------------------------------------
@@ -997,7 +1030,7 @@ template:
       - name: "BEVCC versie"
         unique_id: bevcc_versie
         icon: mdi:tag
-        state: "1.4.0"
+        state: "1.4.1"
 
   - binary_sensor:
       - name: "BEVCC update beschikbaar"

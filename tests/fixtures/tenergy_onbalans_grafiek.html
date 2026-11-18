@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="nl">
+<!-- Synthetische testpagina in de vorm van services.tenergy.nl/public.aspx/actualimbalanceprices,
+     met de grafiekdata (minuutwaarden met tijdstempel) en de tabel. De grafiek wijkt bewust af van
+     de tabel, zodat de test laat zien welke bron gelezen is. Minuten op 2026-10-17 (UTC):
+     12:14, 12:15, 12:16; daarnaast een vooruitgeschoven punt in 2099 en een punt dat niet op een
+     hele minuut valt, die allebei niet mogen tellen. -->
+<head><title>Actuele voorspelde onbalansprijzen - Tenergy Services</title></head>
+<body>
+<script type="text/javascript">
+  var serialChart = new SerialChart();
+  data = {"YAxises":[],"ChartSeries":[
+    {"Id":"APX_PRICES","Name":null,"Data":[{"Key":"/Date(1792239360000)/","Value":99.99}]},
+    {"Id":"PRICES_TAKE","Name":null,"Data":[
+      {"Key":"/Date(1792239240000)/","Value":229.0},
+      {"Key":"/Date(1792239300000)/","Value":1234.56},
+      {"Key":"/Date(1792239330000)/","Value":777.0},
+      {"Key":"/Date(1792239360000)/","Value":251.3},
+      {"Key":"/Date(4070908800000)/","Value":251.3}]},
+    {"Id":"PRICES_FEED","Name":null,"Data":[
+      {"Key":"/Date(1792239240000)/","Value":229.0},
+      {"Key":"/Date(1792239300000)/","Value":null},
+      {"Key":"/Date(1792239330000)/","Value":777.0},
+      {"Key":"/Date(1792239360000)/","Value":-45.5},
+      {"Key":"/Date(4070908800000)/","Value":-45.5}]}
+  ],"DateFormat":"HH:mm","MaxDataPoints":2880};
+  serialChart.updateChart(data, "chartdiv");
+</script>
+<table class="data">
+  <tr><th colspan="3">Tijdsindicatie</th><th colspan="4">Geactiveerd vermogen</th><th colspan="2">Prijsvorming</th></tr>
+  <tr><th>Nummer</th><th>Volgnummer</th><th>Tijd</th><th>Opregelen</th><th>Afregelen</th>
+      <th>Noodvermogen op</th><th>Noodvermogen af</th><th>Invoeden (&euro;/MWh)</th><th>Afnemen (&euro;/MWh)</th></tr>
+  <tr><td>1</td><td>583</td><td>14:16</td><td>0</td><td>176,0</td><td>0</td><td>0</td><td>33,70</td><td>214,90</td></tr>
+</table>
+</body>
+</html>

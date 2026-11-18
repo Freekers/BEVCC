@@ -245,23 +245,65 @@ def scrape(html: str):
     return json.loads(out.stdout)
 
 
+def test_tenergy_scraper_leest_grafiekdata():
+    # De grafiekdata gaat voor de tabel: minuutwaarden met tijdstempel, negatief mag.
+    got = scrape((ha.FIXTURES / "tenergy_onbalans_grafiek.html").read_text(encoding="utf-8"))
+    assert got == {"afnemen": 251.3, "invoeden": -45.5, "tijdstip": 1792239360000,
+                   "tijd": "14:16", "bron": "grafiek"}  # 12:16 UTC = 14:16 zomertijd
+
+
+def test_tenergy_scraper_grafiek_slaat_onbruikbare_punten_over():
+    # Zonder het laatste geldige punt: 12:15 heeft geen invoedingsprijs, 12:15:30 is geen hele
+    # minuut, 2099 ligt in de toekomst -> 12:14.
+    html = (ha.FIXTURES / "tenergy_onbalans_grafiek.html").read_text(encoding="utf-8")
+    html = html.replace('"/Date(1792239360000)/","Value":251.3', '"/Date(1792239360000)/","Value":null')
+    got = scrape(html)
+    assert (got["afnemen"], got["invoeden"], got["tijdstip"], got["bron"]) == (229.0, 229.0, 1792239240000, "grafiek")
+
+
+def test_tenergy_scraper_zonder_grafiek_de_tabel():
+    html = (ha.FIXTURES / "tenergy_onbalans_grafiek.html").read_text(encoding="utf-8")
+    html = html.replace("serialChart.updateChart(data", "serialChart.anders(data")
+    got = scrape(html)
+    assert {k: got[k] for k in ("afnemen", "invoeden", "tijd", "bron")} == \
+        {"afnemen": 214.9, "invoeden": 33.7, "tijd": "14:16", "bron": "tabel"}
+    assert isinstance(got["tijdstip"], int)
+
+
+def tabel(got):
+    """Uitkomst van de tabel, zonder het tijdstip (dat hangt af van de echte klok)."""
+    assert got["bron"] == "tabel" and isinstance(got["tijdstip"], int)
+    return {k: got[k] for k in ("afnemen", "invoeden", "tijd")}
+
+
 def test_tenergy_scraper_leest_bovenste_regel():
     got = scrape((ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8"))
-    assert got == {"afnemen": 214.9, "invoeden": 33.7, "tijd": "12:16"}
+    assert tabel(got) == {"afnemen": 214.9, "invoeden": 33.7, "tijd": "12:16"}
+
+
+def test_tenergy_scraper_tabel_tijdstip():
+    # HH:MM in Nederlandse tijd wordt een tijdstip van vandaag, of van gisteren als dat
+    # anders meer dan 5 minuten in de toekomst ligt.
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    got = scrape((ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8"))
+    t = datetime.fromtimestamp(got["tijdstip"] / 1000, ZoneInfo("Europe/Amsterdam"))
+    assert t.strftime("%H:%M") == "12:16"
+    assert timedelta(minutes=-5) <= datetime.now(ZoneInfo("Europe/Amsterdam")) - t <= timedelta(days=1, minutes=5)
 
 
 def test_tenergy_scraper_duizendtallen_en_negatief():
     html = (ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8")
     html = html.replace("<tr><td>1</td>", "<tr><td>x</td>", 1)  # eerste regel ongeldig maken
     html = html.replace(">12:16<", ">--<")
-    assert scrape(html) == {"afnemen": 1234.56, "invoeden": -12.5, "tijd": "12:15"}
+    assert tabel(scrape(html)) == {"afnemen": 1234.56, "invoeden": -12.5, "tijd": "12:15"}
 
 
 def test_tenergy_scraper_unicode_minteken():
     # Negatieve prijzen met een typografisch minteken (U+2212) of gedachtestreepje
     html = (ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8")
     html = html.replace(">214,90<", ">\u2212412,30<", 1).replace(">33,70<", ">\u20131.234,50<", 1)
-    assert scrape(html) == {"afnemen": -412.3, "invoeden": -1234.5, "tijd": "12:16"}
+    assert tabel(scrape(html)) == {"afnemen": -412.3, "invoeden": -1234.5, "tijd": "12:16"}
 
 
 @pytest.mark.parametrize("html", ["", "<html>onderhoud</html>"])
@@ -270,40 +312,37 @@ def test_tenergy_scraper_leeg_bij_storing(html):
 
 
 TENNET = ha.CFG["command_line"][0]["sensor"]
+T1216 = 1792239360000  # 2026-10-17 12:16 UTC
 
 
-def tennet_actueel(nu, tijd):
+def tennet_actueel(nu, tijdstip):
     ha.set_now(utc(nu))
-    data = {"afnemen": 214.9, "invoeden": 33.7}
-    if tijd is not None:
-        data["tijd"] = tijd
+    data = {"afnemen": 214.9, "invoeden": 33.7, "tijd": "14:16", "bron": "grafiek"}
+    if tijdstip is not None:
+        data["tijdstip"] = tijdstip
     return ha.truthy(ha.render(TENNET["availability"], strict=True, value_json=data))
 
 
 def test_tennet_availability():
-    ha.set_now(utc("12:18"))
-    assert ha.truthy(ha.render(TENNET["availability"], strict=True,
-                               value_json={"afnemen": 214.9, "invoeden": 33.7, "tijd": "12:16"}))
+    assert tennet_actueel("12:18", T1216)
     assert not ha.truthy(ha.render(TENNET["availability"], strict=True, value_json={}))
     assert not ha.truthy(ha.render(TENNET["availability"], strict=True))  # geen JSON
     assert ha.render(TENNET["value_template"], value_json={"afnemen": 214.9}) == "214.9"
 
 
-@pytest.mark.parametrize("nu, tijd, actueel", [
-    ("12:18", "12:16", True),     # normaal: ~2 min achter
-    ("12:26", "12:16", True),     # 10 min: nog net
-    ("12:27", "12:16", False),    # 11 min: verouderd, de pagina staat stil
-    ("15:00", "12:16", False),
-    ("12:14", "12:16", True),     # klok van Home Assistant 2 min achter
-    ("12:10", "12:16", False),    # 6 min 'in de toekomst': niet te vertrouwen
-    ("00:03", "23:58", True),     # rond middernacht
-    ("00:20", "23:58", False),
-    ("12:18", None, False),       # geen tijd
-    ("12:18", "--", False),
-    ("12:18", "12:16:30", False),
+@pytest.mark.parametrize("nu, tijdstip, actueel", [
+    ("12:18", T1216, True),          # normaal: ~2 min achter
+    ("12:26", T1216, True),          # 10 min: nog net
+    ("12:27", T1216, False),         # 11 min: verouderd, de pagina staat stil
+    ("15:00", T1216, False),
+    ("12:14", T1216, True),          # klok van Home Assistant 2 min achter
+    ("12:10", T1216, False),         # 6 min 'in de toekomst': niet te vertrouwen
+    ("12:18", T1216 - 86400000, False),  # zelfde klokminuut, maar van gisteren
+    ("12:18", None, False),          # geen tijdstip (tabel zonder tijdzonegegevens)
+    ("12:18", "12:16", False),
 ])
-def test_tennet_verouderd(nu, tijd, actueel):
-    assert tennet_actueel(nu, tijd) is actueel
+def test_tennet_verouderd(nu, tijdstip, actueel):
+    assert tennet_actueel(nu, tijdstip) is actueel
 
 
 # --- Gecombineerde afnameprijs -----------------------------------------------

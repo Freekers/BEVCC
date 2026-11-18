@@ -159,9 +159,7 @@ sessiekwartier gelijk aan de onbalansprijs voor afnemen van dat kwartier.
   `select.<prefix>_<laadpunt>_min_current`, `sensor.<prefix>_<laadpunt>_phases_active` en
   `select.<prefix>_<laadpunt>_phases`.
 - **Home Assistant 2025.1 of nieuwer** (Home Assistant OS of Container: `curl` en
-  `python3` zijn daar aanwezig), met de tijdzone **Europe/Amsterdam** (Instellingen →
-  Systeem → Algemeen). BEVCC vergelijkt de tijd op de TenneT-pagina met de klok van Home
-  Assistant om verouderde prijzen te herkennen.
+  `python3` zijn daar aanwezig).
 - Home Assistant moet `dashboard.balansenergie.nl`, `services.tenergy.nl` en
   `api.github.com` kunnen bereiken.
 - Aanbevolen: een **circuit met maximale stroom** (hoofdzekering) in EVCC. In de modus
@@ -331,6 +329,13 @@ Een TenneT-prijs die **verouderd** is, telt als niet beschikbaar: is de nieuwste
 de pagina meer dan 10 minuten oud (normaal loopt hij ongeveer 2 minuten achter), dan
 rekent BEVCC er niet meer mee. Zo beslist BEVCC niet op een prijs van een kwartier geleden
 als de pagina blijft hangen.
+
+BEVCC leest de pagina van Tenergy op twee manieren. Eerst de grafiekdata die op de pagina
+staat: minuutwaarden voor *Afnemen* en *Invoeden* met een echt tijdstip, ongeveer anderhalve
+dag terug. Daarmee is ook de leeftijd van de prijs exact, los van de tijdzone van Home
+Assistant. Lukt dat niet (andere opmaak), dan de tabel, met alleen een tijd (HH:MM,
+Nederlandse tijd). Het attribuut `bron` van `sensor.bevcc_tennet_onbalans` zegt welke van
+de twee gebruikt is.
 
 ### De aFRR-sessie uit de Balans-API, niet uit het prijsverschil
 
@@ -605,7 +610,7 @@ naar 1.4 gaat het zo:
 | `sensor.bevcc_afnameprijs` | All-in afnameprijs voor een pauze en op het dashboard (attribuut `kaal`: kale prijs in €/kWh) |
 | `sensor.bevcc_boostprijs` | All-in prijs voor een boost: de afnameprijs, of in een kwartier met alleen dynamische import de dynamische prijs (attribuut `bron`) |
 | `sensor.bevcc_prijsbron` | Welke bron de prijs nu levert |
-| `sensor.bevcc_tennet_onbalans` | Live onbalansprijs *Afnemen* (€/MWh); attributen `afnemen`, `invoeden`, `tijd` |
+| `sensor.bevcc_tennet_onbalans` | Live onbalansprijs *Afnemen* (€/MWh); attributen `afnemen`, `invoeden`, `tijdstip` (ms sinds 1970), `tijd` (HH:MM) en `bron` (`grafiek` of `tabel`) |
 | `binary_sensor.bevcc_afrr_importsessie` | Balans meldt een aFRR-importsessie voor jouw EMS |
 | `sensor.bevcc_balans_kwartierprijs` | All-in kwartierprijs zoals het Balans-dashboard hem toont: aFRR, *Dynamisch* of *Dynamisch + aFRR*; daarbuiten niet beschikbaar |
 | `sensor.bevcc_balans_afrr_importprijs` | Kale aFRR-importprijs van het lopende kwartier |
@@ -678,7 +683,8 @@ Assistant.
 
 **Oranje balk "Live TenneT-prijs niet beschikbaar of verouderd".** De onbalanspagina is
 tijdelijk onbereikbaar, veranderd, of de nieuwste minuut is meer dan 10 minuten oud. Staat
-de balk er altijd, controleer dan of Home Assistant in de tijdzone Europe/Amsterdam staat. Tijdens een aFRR-sessie of dynamische import rekent BEVCC dan
+de balk er altijd, controleer dan of de klok van Home Assistant goed staat. Tijdens een
+aFRR-sessie of dynamische import rekent BEVCC dan
 met de prijs van Balans; daarbuiten heeft BEVCC geen prijs en doet het niets. Blijft het zo,
 meld het dan als [issue](https://github.com/Freekers/BEVCC/issues).
 

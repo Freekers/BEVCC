@@ -5,6 +5,21 @@ Alle noemenswaardige wijzigingen in BEVCC. Versies volgen
 (2.0.0) betekent dat je iets moet aanpassen (bijvoorbeeld in secrets.yaml of je
 dashboard); dat staat dan bij die versie.
 
+## [1.4.1] - 2026-11-18
+
+De live onbalansprijs komt nu uit de grafiekdata op de pagina van Tenergy, met een echt
+tijdstip per minuut. Lukt dat niet, dan uit de tabel, zoals eerder.
+
+### Gewijzigd
+
+- `sensor.bevcc_tennet_onbalans` leest de minuutwaarden met tijdstip uit de grafiekdata van
+  de pagina. Nieuwe attributen: `tijdstip` (ms sinds 1970) en `bron` (`grafiek` of
+  `tabel`). Een vooruitgeschoven laatste punt op de pagina telt niet.
+- De controle op een verouderde prijs (10 minuten) gebruikt dat tijdstip. Home Assistant
+  hoeft daarvoor niet meer in de tijdzone Europe/Amsterdam te staan.
+- Negatieve prijzen komen uit de grafiekdata als gewone getallen; de tabel blijft als
+  terugval, met de bestaande controle op het minteken.
+
 ## [1.4.0] - 2026-11-17
 
 Laadstroom regelen tijdens een boost, en boosten bij goedkope teruglevering. Beide staan
