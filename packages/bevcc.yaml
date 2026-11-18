@@ -35,7 +35,9 @@
 #     afregelprijs, en daartegen wordt aFRR-import afgerekend.
 #   - anders: de live onbalansprijs 'Afnemen'.
 #   (TenneT-gegevens per minuut, via services.tenergy.nl)
-#   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans.
+#   Terugval: de aFRR-prijs van Balans, daarna de kwartierprijs van Balans
+#   (sinds 18 november 2026 alleen tijdens een aFRR-sessie of dynamische
+#   import: de Balans-API geeft geen onbalansprijzen meer).
 # Voor een boost (sensor.bevcc_boostprijs) geldt in een kwartier met
 # dynamische (day-ahead) import zonder aFRR-sessie de dynamische prijs.
 # Voor een boost bij export (sensor.bevcc_exportprijs): tijdens een
@@ -298,11 +300,14 @@ rest:
 
     sensor:
       # De eigen all-in kwartierprijs van Balans, zoals het Balans-dashboard
-      # hem toont: aFRR-importprijs tijdens een sessie (als Balans een bod
-      # had), de dynamische prijs tijdens dynamische import, het gemiddelde
-      # van die twee ('Dynamisch + aFRR') als beide spelen, en anders de
-      # onbalans-afnameprijs. Balans werkt het lopende kwartier pas een paar
-      # minuten na de start bij; alleen als laatste terugval en ter vergelijking.
+      # hem toont: aFRR-importprijs tijdens een sessie, de dynamische prijs
+      # tijdens dynamische import, en het gemiddelde van die twee ('Dynamisch +
+      # aFRR') als beide spelen. Sinds 18 november 2026 geeft de API alleen nog
+      # deze prijzen, niet meer de onbalansprijs: buiten een aFRR-sessie of
+      # dynamische import is deze sensor dus niet beschikbaar. (Geeft de API
+      # toch onbalans_import, zoals vroeger, dan telt die.) Balans werkt het
+      # lopende kwartier pas een paar minuten na de start bij; alleen als
+      # terugval en ter vergelijking.
       - name: "BEVCC Balans kwartierprijs"
         unique_id: bevcc_balans_kwartierprijs
         unit_of_measurement: "EUR/kWh"
@@ -311,25 +316,37 @@ rest:
         availability: >-
           {% set nu = (as_timestamp(now()) * 1000) | int %}
           {% set data = value_json if value_json is defined and value_json is mapping else {} %}
-          {{ data.get('prices', []) | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu)
-             | selectattr('values.onbalans_import', 'number') | list | count > 0 }}
-        value_template: >-
-          {% set nu = (as_timestamp(now()) * 1000) | int %}
-          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
-          {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
-          {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
           {% set ns = namespace(kaal=none) %}
           {% for p in data.get('prices', []) if p.start <= nu < p.end %}
             {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
                           | map(attribute='directions') | first | default([], true) %}
-            {% set v = p['values'] %}
-            {% set afrr = v['afrr_import'] if 'import' in dirs and v['afrr_import'] is number else none %}
-            {% set dyn = v['day_ahead_import'] if v['day_ahead_import'] is number else none %}
-            {% if afrr is not none and dyn is not none and v['day_ahead_afrr_import'] is number %}
-              {% set ns.kaal = v['day_ahead_afrr_import'] %}
-            {% elif afrr is not none %}{% set ns.kaal = afrr %}
-            {% elif dyn is not none %}{% set ns.kaal = dyn %}
-            {% else %}{% set ns.kaal = v['onbalans_import'] %}{% endif %}
+            {% set v = p.get('values') or {} %}
+            {% set afrr = v.get('afrr_import') if 'import' in dirs else none %}
+            {% set dyn = v.get('day_ahead_import') %}
+            {% if afrr is number and dyn is number and v.get('day_ahead_afrr_import') is number %}
+              {% set ns.kaal = v.get('day_ahead_afrr_import') %}
+            {% elif afrr is number %}{% set ns.kaal = afrr %}
+            {% elif dyn is number %}{% set ns.kaal = dyn %}
+            {% elif v.get('onbalans_import') is number %}{% set ns.kaal = v.get('onbalans_import') %}{% endif %}
+          {% endfor %}
+          {{ ns.kaal is number }}
+        value_template: >-
+          {% set eb = states('input_number.bevcc_energiebelasting') | float(0.11085) %}
+          {% set leverkosten = states('input_number.bevcc_leverkosten') | float(0.02) %}
+          {% set nu = (as_timestamp(now()) * 1000) | int %}
+          {% set data = value_json if value_json is defined and value_json is mapping else {} %}
+          {% set ns = namespace(kaal=none) %}
+          {% for p in data.get('prices', []) if p.start <= nu < p.end %}
+            {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
+                          | map(attribute='directions') | first | default([], true) %}
+            {% set v = p.get('values') or {} %}
+            {% set afrr = v.get('afrr_import') if 'import' in dirs else none %}
+            {% set dyn = v.get('day_ahead_import') %}
+            {% if afrr is number and dyn is number and v.get('day_ahead_afrr_import') is number %}
+              {% set ns.kaal = v.get('day_ahead_afrr_import') %}
+            {% elif afrr is number %}{% set ns.kaal = afrr %}
+            {% elif dyn is number %}{% set ns.kaal = dyn %}
+            {% elif v.get('onbalans_import') is number %}{% set ns.kaal = v.get('onbalans_import') %}{% endif %}
           {% endfor %}
           {{ (ns.kaal * 1.21 + leverkosten + eb) | round(5) if ns.kaal is number else none }}
 
@@ -385,9 +402,10 @@ rest:
 
       # Kale exportprijs van Balans voor het lopende kwartier: tijdens een
       # aFRR-exportsessie de aFRR-exportprijs (in de bekeken gegevens gelijk
-      # aan onbalans_import, de opregelprijs), anders de onbalansprijs voor
-      # teruglevering. Terugval als de TenneT-bron niet werkt. Buiten een
-      # sessie staat in afrr_export het bod van Balans; dat telt niet.
+      # aan de opregelprijs). Sinds 18 november 2026 geeft de API geen
+      # onbalansprijs meer: buiten een aFRR-exportsessie is deze sensor dus
+      # niet beschikbaar (geeft de API toch onbalans_export, dan telt die).
+      # Terugval als de TenneT-bron niet werkt.
       - name: "BEVCC Balans exportprijs"
         unique_id: bevcc_balans_exportprijs
         unit_of_measurement: "EUR/kWh"
@@ -396,8 +414,15 @@ rest:
         availability: >-
           {% set nu = (as_timestamp(now()) * 1000) | int %}
           {% set data = value_json if value_json is defined and value_json is mapping else {} %}
-          {{ data.get('prices', []) | selectattr('start', 'le', nu) | selectattr('end', 'gt', nu)
-             | selectattr('values.onbalans_export', 'number') | list | count > 0 }}
+          {% set ns = namespace(kaal=none) %}
+          {% for p in data.get('prices', []) if p.start <= nu < p.end %}
+            {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
+                          | map(attribute='directions') | first | default([], true) %}
+            {% set v = p.get('values') or {} %}
+            {% set afrr = v.get('afrr_export') if 'export' in dirs else none %}
+            {% set ns.kaal = afrr if afrr is number else v.get('onbalans_export') %}
+          {% endfor %}
+          {{ ns.kaal is number }}
         value_template: >-
           {% set nu = (as_timestamp(now()) * 1000) | int %}
           {% set data = value_json if value_json is defined and value_json is mapping else {} %}
@@ -405,8 +430,9 @@ rest:
           {% for p in data.get('prices', []) if p.start <= nu < p.end %}
             {% set dirs = data.get('afrrDiscovery', []) | selectattr('start', 'eq', p.start)
                           | map(attribute='directions') | first | default([], true) %}
-            {% set v = p['values'] %}
-            {% set ns.kaal = v['afrr_export'] if 'export' in dirs and v['afrr_export'] is number else v['onbalans_export'] %}
+            {% set v = p.get('values') or {} %}
+            {% set afrr = v.get('afrr_export') if 'export' in dirs else none %}
+            {% set ns.kaal = afrr if afrr is number else v.get('onbalans_export') %}
           {% endfor %}
           {{ ns.kaal | round(5) if ns.kaal is number else none }}
 
@@ -590,7 +616,8 @@ template:
   #    Afnameprijs (pauze, dashboard): wat extra afname nu kost.
   #      Tijdens een aFRR-importsessie: TenneT 'Invoeden' (afregelprijs),
   #      anders de aFRR-prijs van Balans. Zonder sessie: TenneT 'Afnemen',
-  #      anders de kwartierprijs van Balans. De dynamische (day-ahead) prijs
+  #      anders de kwartierprijs van Balans (alleen nog bij dynamische
+  #      import; zonder TenneT is er dan geen prijs). De dynamische prijs
   #      telt hier niet mee: dat volume is al ingekocht en het EMS houdt de
   #      netafname op het plan, dus een pauze bespaart daarop niets.
   #    Boostprijs: de afnameprijs, behalve in een kwartier met dynamische

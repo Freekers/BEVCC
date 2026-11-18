@@ -123,7 +123,7 @@ cards:
     card:
       type: markdown
       content: |
-        <ha-alert alert-type="warning">Live TenneT-prijs niet beschikbaar: BEVCC rekent met de kwartierprijs van Balans (loopt een paar minuten achter).</ha-alert>
+        <ha-alert alert-type="warning">Live TenneT-prijs niet beschikbaar. Balans geeft alleen tijdens een aFRR-sessie of dynamische import een eigen prijs (een paar minuten na de start van het kwartier); daarbuiten heeft BEVCC geen prijs en pauzeert of boost het niet.</ha-alert>
   - type: conditional
     conditions:
       - condition: state

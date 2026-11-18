@@ -1,0 +1,33 @@
+{
+  "_toelichting": "Synthetische testdata in de vorm van /customer/current-prices/api/ van Balans Energie sinds 18 november 2026: 'values' bevat alleen nog prijzen die voor jouw EMS gelden (afrr_import tijdens een aFRR-importsessie, day_ahead_import en day_ahead_afrr_import tijdens dynamische import), geen onbalansprijzen meer; afrrBidStatus alleen bij een sessie. Kwartieren vanaf 2026-10-17 10:00 UTC, zelfde opzet als balans_current_prices.json: Q0 geen sessie, Q1 aFRR-importsessie, Q2 geen sessie (alleen controlDirections import), Q3 aFRR-exportsessie (geen prijs in de API), Q4 (11:00) dynamische import, Q5 (11:15) dynamische import + aFRR-importsessie, Q6 (11:30) aFRR-importsessie met negatieve prijs, Q7 (11:45) nog niet gemeld.",
+  "prices": [
+    {"start": 1792231200000, "end": 1792232100000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T10:17:12.000Z", "checkedAt": 1792237680000, "values": {}},
+    {"start": 1792232100000, "end": 1792233000000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T10:32:12.000Z", "checkedAt": 1792237680000, "values": {"afrr_import": 0.0337}, "afrrBidStatus": {"import": "confirmed"}},
+    {"start": 1792233000000, "end": 1792233900000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T10:47:12.000Z", "checkedAt": 1792237680000, "values": {}},
+    {"start": 1792233900000, "end": 1792234800000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T11:02:12.000Z", "checkedAt": 1792237680000, "values": {}},
+    {"start": 1792234800000, "end": 1792235700000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T11:17:12.000Z", "checkedAt": 1792237680000, "values": {"day_ahead_import": 0.05}},
+    {"start": 1792235700000, "end": 1792236600000, "provisional": true, "fresh": false, "updatedAt": "2026-10-17T11:32:12.000Z", "checkedAt": 1792237680000, "values": {"afrr_import": 0.02, "day_ahead_import": 0.06, "day_ahead_afrr_import": 0.04}, "afrrBidStatus": {"import": "confirmed"}},
+    {"start": 1792236600000, "end": 1792237500000, "provisional": true, "fresh": true, "updatedAt": "2026-10-17T11:34:01.000Z", "checkedAt": 1792237680000, "values": {"afrr_import": -0.25}, "afrrBidStatus": {"import": "confirmed"}}
+  ],
+  "dayAheadPlans": [
+    {"start": 1792234800000, "end": 1792235700000, "direction": "import", "quantityW": 9800.0},
+    {"start": 1792235700000, "end": 1792236600000, "direction": "import", "quantityW": 9750.0}
+  ],
+  "dayAheadUnavailableWindows": [],
+  "commands": [],
+  "commandsAvailable": true,
+  "afrrEventIsps": [1792232100000, 1792233900000, 1792235700000, 1792236600000],
+  "afrrDiscovery": [
+    {"start": 1792231200000, "directions": [], "observedUntil": 1792232100000, "complete": true, "controlDirections": []},
+    {"start": 1792232100000, "directions": ["import"], "observedUntil": 1792233000000, "complete": true, "controlDirections": ["import"]},
+    {"start": 1792233000000, "directions": [], "observedUntil": 1792233900000, "complete": true, "controlDirections": ["import"]},
+    {"start": 1792233900000, "directions": ["export"], "observedUntil": 1792234800000, "complete": true, "controlDirections": ["export"]},
+    {"start": 1792234800000, "directions": [], "observedUntil": 1792235700000, "complete": true, "controlDirections": ["import"]},
+    {"start": 1792235700000, "directions": ["import"], "observedUntil": 1792236600000, "complete": true, "controlDirections": ["import"]},
+    {"start": 1792236600000, "directions": ["import"], "observedUntil": 1792237680000, "complete": true, "controlDirections": ["import"]}
+  ],
+  "afrrAvailable": true,
+  "historyBackfilled": true,
+  "windows": [[1792231200000, 1792237680000]],
+  "generatedAt": 1792237680000
+}

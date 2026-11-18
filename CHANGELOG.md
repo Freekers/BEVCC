@@ -36,6 +36,13 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
 
 ### Gewijzigd
 
+- **Balans-API van 18 november 2026.** Balans geeft alleen nog de prijzen die voor jouw EMS
+  gelden (aFRR-importprijs tijdens een sessie, dynamische prijs), niet meer de
+  onbalansprijzen. Daardoor was `sensor.bevcc_balans_kwartierprijs` altijd *niet
+  beschikbaar* (ook in 1.3). Die toont nu weer de prijs van Balans tijdens een aFRR-sessie
+  of dynamische import; daarbuiten is hij niet beschikbaar. De sessieherkenning en de
+  live TenneT-prijzen werkten gewoon door. Valt TenneT weg buiten een sessie of dynamische
+  import, dan heeft BEVCC geen terugvalprijs meer en doet het niets.
 - **Boost aan/uit met een schakelaar** (`input_boolean.bevcc_boost_import`,
   `input_boolean.bevcc_boost_export`) in plaats van *Boost onder* op − € 0,50. Prijzen
   kunnen negatief zijn (bij onbalans soms honderden euro's per MWh onder nul), dus elke

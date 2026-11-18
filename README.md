@@ -102,7 +102,7 @@ De kale prijs komt per minuut uit deze bronnen, in deze volgorde:
 | aFRR-importsessie van jouw EMS | live onbalansprijs **Invoeden** (de afregelprijs) | `sensor.bevcc_tennet_onbalans`, attribuut `invoeden` |
 | aFRR-importsessie, live prijs niet beschikbaar | aFRR-importprijs van Balans | `sensor.bevcc_balans_afrr_importprijs` |
 | geen sessie | live onbalansprijs **Afnemen** | `sensor.bevcc_tennet_onbalans` |
-| live prijs niet beschikbaar | all-in kwartierprijs van Balans | `sensor.bevcc_balans_kwartierprijs` |
+| live prijs niet beschikbaar | all-in kwartierprijs van Balans, alleen tijdens een aFRR-sessie of dynamische import (zie hieronder) | `sensor.bevcc_balans_kwartierprijs` |
 
 Dat is de **afnameprijs** (`sensor.bevcc_afnameprijs`): de prijs voor een pauze en op het
 dashboard. Voor een **boost** geldt de **boostprijs** (`sensor.bevcc_boostprijs`): dezelfde
@@ -136,7 +136,7 @@ export](#boost-bij-export)). De kale prijs staat in het attribuut `kaal` en komt
 |---|---|---|
 | aFRR-exportsessie van jouw EMS | live onbalansprijs **Afnemen** (de opregelprijs) | `sensor.bevcc_tennet_onbalans`, attribuut `afnemen` |
 | andere teruglevering | live onbalansprijs **Invoeden** | `sensor.bevcc_tennet_onbalans`, attribuut `invoeden` |
-| live prijs niet beschikbaar | exportprijs van Balans voor het kwartier | `sensor.bevcc_balans_exportprijs` |
+| live prijs niet beschikbaar | exportprijs van Balans, alleen tijdens een aFRR-exportsessie (als Balans hem meldt) | `sensor.bevcc_balans_exportprijs` |
 | dynamisch (day-ahead) exportplan | onbekend: geen boost bij export | `binary_sensor.bevcc_dynamische_export` |
 
 Een aFRR-exportsessie is het spiegelbeeld van een importsessie: TenneT moet **opregelen**,
@@ -317,6 +317,13 @@ Balans werkt de prijs van het lopende kwartier maar één keer bij, een paar min
 de start. Wie daarop wacht, loopt altijd achter: een prijspiek is dan al minuten bezig.
 De onbalansprijs per minuut (met ongeveer 2 minuten vertraging gepubliceerd) is veel
 eerder. De kwartierprijs van Balans is daarom alleen terugval en vergelijking.
+
+Sinds 18 november 2026 geeft de Balans-API alleen nog de prijzen die specifiek voor jouw
+EMS gelden: de aFRR-importprijs tijdens een sessie en de dynamische prijs tijdens
+dynamische import. De gewone onbalansprijs (*Afnemen* en *Invoeden*) staat er niet meer
+in. BEVCC haalt die toch al live van TenneT; alleen de terugval verandert. Valt de
+TenneT-bron weg buiten een aFRR-sessie of dynamische import, dan heeft BEVCC geen prijs
+en pauzeert of boost het niet (een lopende pauze blijft nog 15 minuten staan).
 
 ### De aFRR-sessie uit de Balans-API, niet uit het prijsverschil
 
@@ -593,7 +600,7 @@ naar 1.4 gaat het zo:
 | `sensor.bevcc_prijsbron` | Welke bron de prijs nu levert |
 | `sensor.bevcc_tennet_onbalans` | Live onbalansprijs *Afnemen* (€/MWh); attributen `afnemen`, `invoeden`, `tijd` |
 | `binary_sensor.bevcc_afrr_importsessie` | Balans meldt een aFRR-importsessie voor jouw EMS |
-| `sensor.bevcc_balans_kwartierprijs` | All-in kwartierprijs zoals het Balans-dashboard hem toont (ook *Dynamisch* en *Dynamisch + aFRR*) |
+| `sensor.bevcc_balans_kwartierprijs` | All-in kwartierprijs zoals het Balans-dashboard hem toont: aFRR, *Dynamisch* of *Dynamisch + aFRR*; daarbuiten niet beschikbaar |
 | `sensor.bevcc_balans_afrr_importprijs` | Kale aFRR-importprijs van het lopende kwartier |
 | `sensor.bevcc_balans_dynamisch_prijs` | Kale dynamische (day-ahead) prijs; alleen beschikbaar in kwartieren met dynamische import |
 | `binary_sensor.bevcc_prijspiek` | Prijs boven *Pauze boven* |
@@ -663,7 +670,8 @@ reageerde niet. Controleer of je de modus in EVCC zelf kunt wijzigen vanuit Home
 Assistant.
 
 **Oranje balk "Live TenneT-prijs niet beschikbaar".** De onbalanspagina is tijdelijk
-onbereikbaar of veranderd. BEVCC rekent dan met de kwartierprijs van Balans. Blijft het zo,
+onbereikbaar of veranderd. Tijdens een aFRR-sessie of dynamische import rekent BEVCC dan
+met de prijs van Balans; daarbuiten heeft BEVCC geen prijs en doet het niets. Blijft het zo,
 meld het dan als [issue](https://github.com/Freekers/BEVCC/issues).
 
 **Wat deed BEVCC precies?** Instellingen → Automatiseringen → *BEVCC prijssturing* →
@@ -681,7 +689,8 @@ pauze, boost en vrijgave met prijs, bron, netvermogen en thuisaccu.
 - De Balans-API is niet openbaar: Balans kan hem zonder aankondiging veranderen of
   afsluiten, en de cookie moet je af en toe vernieuwen.
 - De onbalanspagina van Tenergy wordt uitgelezen (*scraping*); een andere opmaak kan de
-  live prijs laten wegvallen (dan is er terugval op de kwartierprijs van Balans).
+  live prijs laten wegvallen. Balans geeft alleen tijdens een aFRR-sessie of dynamische
+  import een eigen prijs; daarbuiten heeft BEVCC zonder TenneT geen prijs.
 - De minuutprijs is een voorlopige waarde. De afrekening van Balans gebruikt de definitieve
   kwartierprijs; die kan anders uitvallen (zie [Boost bij: aFRR, dynamisch of
   onbalans?](#boost-bij-afrr-dynamisch-of-onbalans)).
