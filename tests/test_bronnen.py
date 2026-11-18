@@ -269,12 +269,41 @@ def test_tenergy_scraper_leeg_bij_storing(html):
     assert scrape(html) == {}
 
 
+TENNET = ha.CFG["command_line"][0]["sensor"]
+
+
+def tennet_actueel(nu, tijd):
+    ha.set_now(utc(nu))
+    data = {"afnemen": 214.9, "invoeden": 33.7}
+    if tijd is not None:
+        data["tijd"] = tijd
+    return ha.truthy(ha.render(TENNET["availability"], strict=True, value_json=data))
+
+
 def test_tennet_availability():
-    item = ha.CFG["command_line"][0]["sensor"]
-    assert ha.truthy(ha.render(item["availability"], strict=True, value_json={"afnemen": 214.9}))
-    assert not ha.truthy(ha.render(item["availability"], strict=True, value_json={}))
-    assert not ha.truthy(ha.render(item["availability"], strict=True))  # geen JSON
-    assert ha.render(item["value_template"], value_json={"afnemen": 214.9}) == "214.9"
+    ha.set_now(utc("12:18"))
+    assert ha.truthy(ha.render(TENNET["availability"], strict=True,
+                               value_json={"afnemen": 214.9, "invoeden": 33.7, "tijd": "12:16"}))
+    assert not ha.truthy(ha.render(TENNET["availability"], strict=True, value_json={}))
+    assert not ha.truthy(ha.render(TENNET["availability"], strict=True))  # geen JSON
+    assert ha.render(TENNET["value_template"], value_json={"afnemen": 214.9}) == "214.9"
+
+
+@pytest.mark.parametrize("nu, tijd, actueel", [
+    ("12:18", "12:16", True),     # normaal: ~2 min achter
+    ("12:26", "12:16", True),     # 10 min: nog net
+    ("12:27", "12:16", False),    # 11 min: verouderd, de pagina staat stil
+    ("15:00", "12:16", False),
+    ("12:14", "12:16", True),     # klok van Home Assistant 2 min achter
+    ("12:10", "12:16", False),    # 6 min 'in de toekomst': niet te vertrouwen
+    ("00:03", "23:58", True),     # rond middernacht
+    ("00:20", "23:58", False),
+    ("12:18", None, False),       # geen tijd
+    ("12:18", "--", False),
+    ("12:18", "12:16:30", False),
+])
+def test_tennet_verouderd(nu, tijd, actueel):
+    assert tennet_actueel(nu, tijd) is actueel
 
 
 # --- Gecombineerde afnameprijs -----------------------------------------------

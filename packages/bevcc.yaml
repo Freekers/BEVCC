@@ -454,6 +454,11 @@ rest:
 command_line:
   # TenneT-onbalansprijzen per minuut (EUR/MWh), via services.tenergy.nl.
   # Toestand = 'Afnemen'; attributen afnemen, invoeden en tijd (HH:MM).
+  # Verouderd = niet beschikbaar: is de nieuwste regel meer dan 10 minuten
+  # oud (de pagina loopt normaal ~2 min achter), dan rekent BEVCC er niet
+  # mee. 'tijd' is Nederlandse tijd; Home Assistant moet dus in de tijdzone
+  # Europe/Amsterdam staan. Tot 5 min 'in de toekomst' (klokverschil) telt
+  # als actueel; rond middernacht rekent de modulo door.
   - sensor:
       name: "BEVCC TenneT onbalans"
       unique_id: bevcc_tennet_onbalans
@@ -476,7 +481,12 @@ command_line:
         print(json.dumps({'afnemen': norm(valid[0][-1]), 'invoeden': norm(valid[0][-2]), 'tijd': valid[0][2]}) if valid else '{}')
         "
       availability: >-
-        {{ value_json is defined and value_json is mapping and value_json.get('afnemen') is number }}
+        {% set ok = value_json is defined and value_json is mapping and value_json.get('afnemen') is number %}
+        {% set delen = ((value_json.get('tijd') or '') | string).split(':') if ok else [] %}
+        {% if delen | count == 2 and delen[0] | int(-1) >= 0 and delen[1] | int(-1) >= 0 %}
+          {% set leeftijd = (now().hour * 60 + now().minute - (delen[0] | int) * 60 - (delen[1] | int)) % 1440 %}
+          {{ leeftijd <= 10 or leeftijd >= 1435 }}
+        {% else %}false{% endif %}
       value_template: "{{ value_json.afnemen }}"
       json_attributes:
         - afnemen

@@ -43,6 +43,10 @@ standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
   of dynamische import; daarbuiten is hij niet beschikbaar. De sessieherkenning en de
   live TenneT-prijzen werkten gewoon door. Valt TenneT weg buiten een sessie of dynamische
   import, dan heeft BEVCC geen terugvalprijs meer en doet het niets.
+- **Verouderde TenneT-prijs telt niet.** Is de nieuwste minuut op de onbalanspagina meer dan
+  10 minuten oud, dan is `sensor.bevcc_tennet_onbalans` niet beschikbaar en beslist BEVCC
+  niet op een oude prijs. Home Assistant moet daarvoor in de tijdzone Europe/Amsterdam
+  staan.
 - **Boost aan/uit met een schakelaar** (`input_boolean.bevcc_boost_import`,
   `input_boolean.bevcc_boost_export`) in plaats van *Boost onder* op − € 0,50. Prijzen
   kunnen negatief zijn (bij onbalans soms honderden euro's per MWh onder nul), dus elke

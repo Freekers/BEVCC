@@ -159,7 +159,9 @@ sessiekwartier gelijk aan de onbalansprijs voor afnemen van dat kwartier.
   `select.<prefix>_<laadpunt>_min_current`, `sensor.<prefix>_<laadpunt>_phases_active` en
   `select.<prefix>_<laadpunt>_phases`.
 - **Home Assistant 2025.1 of nieuwer** (Home Assistant OS of Container: `curl` en
-  `python3` zijn daar aanwezig).
+  `python3` zijn daar aanwezig), met de tijdzone **Europe/Amsterdam** (Instellingen →
+  Systeem → Algemeen). BEVCC vergelijkt de tijd op de TenneT-pagina met de klok van Home
+  Assistant om verouderde prijzen te herkennen.
 - Home Assistant moet `dashboard.balansenergie.nl`, `services.tenergy.nl` en
   `api.github.com` kunnen bereiken.
 - Aanbevolen: een **circuit met maximale stroom** (hoofdzekering) in EVCC. In de modus
@@ -324,6 +326,11 @@ dynamische import. De gewone onbalansprijs (*Afnemen* en *Invoeden*) staat er ni
 in. BEVCC haalt die toch al live van TenneT; alleen de terugval verandert. Valt de
 TenneT-bron weg buiten een aFRR-sessie of dynamische import, dan heeft BEVCC geen prijs
 en pauzeert of boost het niet (een lopende pauze blijft nog 15 minuten staan).
+
+Een TenneT-prijs die **verouderd** is, telt als niet beschikbaar: is de nieuwste minuut op
+de pagina meer dan 10 minuten oud (normaal loopt hij ongeveer 2 minuten achter), dan
+rekent BEVCC er niet meer mee. Zo beslist BEVCC niet op een prijs van een kwartier geleden
+als de pagina blijft hangen.
 
 ### De aFRR-sessie uit de Balans-API, niet uit het prijsverschil
 
@@ -669,8 +676,9 @@ aangesloten maar laadt hij niet, dan laat BEVCC EVCC met rust.
 reageerde niet. Controleer of je de modus in EVCC zelf kunt wijzigen vanuit Home
 Assistant.
 
-**Oranje balk "Live TenneT-prijs niet beschikbaar".** De onbalanspagina is tijdelijk
-onbereikbaar of veranderd. Tijdens een aFRR-sessie of dynamische import rekent BEVCC dan
+**Oranje balk "Live TenneT-prijs niet beschikbaar of verouderd".** De onbalanspagina is
+tijdelijk onbereikbaar, veranderd, of de nieuwste minuut is meer dan 10 minuten oud. Staat
+de balk er altijd, controleer dan of Home Assistant in de tijdzone Europe/Amsterdam staat. Tijdens een aFRR-sessie of dynamische import rekent BEVCC dan
 met de prijs van Balans; daarbuiten heeft BEVCC geen prijs en doet het niets. Blijft het zo,
 meld het dan als [issue](https://github.com/Freekers/BEVCC/issues).
 
