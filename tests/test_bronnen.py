@@ -105,6 +105,132 @@ def test_balans_dynamisch_prijs_oude_api():
     assert float(rest(REST_SENSOR["BEVCC Balans kwartierprijs"], utc("11:05"), oud)) == pytest.approx(0.12 * 1.21 + VAST)
 
 
+# --- Balans-API: export -------------------------------------------------------
+
+REST_BINARY = {s["name"]: s for s in RES["binary_sensor"]}
+
+
+@pytest.mark.parametrize("hm, verwacht", [
+    ("10:05", "False"),   # geen sessie
+    ("10:20", "False"),   # importsessie telt niet
+    ("10:50", "True"),    # aFRR-exportsessie
+    ("11:02", "True"),    # overloop: eerste 5 min na een exportkwartier
+    ("11:06", "False"),   # overloop voorbij
+    ("11:20", "False"),   # dynamisch + aFRR-import
+])
+def test_afrr_exportsessie(hm, verwacht):
+    assert rest(REST_BINARY["BEVCC aFRR-exportsessie"], utc(hm)) == verwacht
+
+
+def _met_exportplan():
+    import copy
+    data = copy.deepcopy(BALANS)
+    # dynamisch exportplan in Q4 (11:00-11:15 UTC), naast het importplan van Q5
+    data["dayAheadPlans"][0] = {"start": 1792234800000, "end": 1792235700000, "direction": "export", "quantityW": 8000.0}
+    return data
+
+
+@pytest.mark.parametrize("hm, data, verwacht", [
+    ("11:05", None, "False"),   # alleen importplannen
+    ("11:05", "export", "True"),
+    ("11:17", "export", "True"),    # overloop uit 11:00
+    ("11:21", "export", "False"),
+    ("10:50", "export", "False"),
+    ("11:05", "oud", "False"),      # antwoord zonder dayAheadPlans
+])
+def test_dynamische_export(hm, data, verwacht):
+    import copy
+    if data == "export":
+        data = _met_exportplan()
+    elif data == "oud":
+        data = copy.deepcopy(BALANS)
+        data.pop("dayAheadPlans")
+    else:
+        data = BALANS
+    assert rest(REST_BINARY["BEVCC dynamische export"], utc(hm), data) == verwacht
+
+
+@pytest.mark.parametrize("data", [None, "<html>inloggen</html>"])
+def test_export_unavailable_bij_ongeldig_antwoord(data):
+    assert rest(REST_BINARY["BEVCC aFRR-exportsessie"], utc("10:50"), data) == "unavailable"
+    assert rest(REST_BINARY["BEVCC dynamische export"], utc("10:50"), data) == "unavailable"
+    assert rest(REST_SENSOR["BEVCC Balans exportprijs"], utc("10:50"), data) == "unavailable"
+
+
+@pytest.mark.parametrize("hm, verwacht", [
+    ("10:05", "0.12"),          # onbalansprijs teruglevering; het aFRR-exportbod telt niet
+    ("10:20", "0.0337"),        # importsessie: gewoon de onbalansprijs teruglevering
+    ("10:40", "0.14"),          # missing_bid
+    ("10:50", "4.17"),          # aFRR-exportsessie: de aFRR-exportprijs
+    ("11:32", "unavailable"),   # kwartier nog niet gemeld
+])
+def test_balans_exportprijs(hm, verwacht):
+    assert rest(REST_SENSOR["BEVCC Balans exportprijs"], utc(hm)) == verwacht
+
+
+# --- Balans-API sinds 18 november 2026: alleen eigen prijzen ------------------
+# 'values' bevat alleen nog afrr_import (tijdens een aFRR-importsessie) en
+# day_ahead_import / day_ahead_afrr_import (dynamisch); geen onbalansprijzen.
+
+SPAARZAAM = json.loads((ha.FIXTURES / "balans_current_prices_sparse.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("hm, verwacht", [
+    ("10:05", "False"), ("10:20", "True"), ("10:33", "True"), ("10:36", "False"), ("10:50", "False"),
+    ("11:20", "True"), ("11:35", "True"),
+    ("11:48", "True"),    # Q7 nog niet gemeld: overloop uit Q6
+    ("11:51", "False"),
+])
+def test_spaarzaam_afrr_importsessie(hm, verwacht):
+    assert rest(SESSIE, utc(hm), SPAARZAAM) == verwacht
+
+
+@pytest.mark.parametrize("hm, verwacht", [
+    ("10:05", None),                       # geen sessie: Balans geeft geen prijs meer
+    ("10:20", 0.0337),                     # aFRR-importprijs
+    ("10:40", None),                       # alleen controlDirections
+    ("10:50", None),                       # exportsessie
+    ("11:05", 0.05),                       # 'Dynamisch'
+    ("11:20", 0.04),                       # 'Dynamisch + aFRR'
+    ("11:35", -0.25),                      # negatieve aFRR-importprijs
+    ("11:48", None),                       # nog niet gemeld
+])
+def test_spaarzaam_balans_kwartierprijs(hm, verwacht):
+    got = rest(REST_SENSOR["BEVCC Balans kwartierprijs"], utc(hm), SPAARZAAM)
+    if verwacht is None:
+        assert got == "unavailable"
+    else:
+        assert float(got) == pytest.approx(verwacht * 1.21 + VAST, abs=1e-5)
+
+
+@pytest.mark.parametrize("hm, verwacht", [("10:20", "0.0337"), ("11:20", "0.02"), ("11:35", "-0.25"),
+                                          ("10:05", "unavailable"), ("11:05", "unavailable")])
+def test_spaarzaam_balans_afrr_importprijs(hm, verwacht):
+    assert rest(REST_SENSOR["BEVCC Balans aFRR-importprijs"], utc(hm), SPAARZAAM) == verwacht
+
+
+@pytest.mark.parametrize("hm, verwacht", [
+    ("11:05", "0.05"), ("11:20", "0.06"),
+    ("11:32", "unavailable"),   # 11:30 al gemeld en niet dynamisch: geen overloop
+    ("10:20", "unavailable"),
+])
+def test_spaarzaam_balans_dynamisch_prijs(hm, verwacht):
+    assert rest(REST_SENSOR["BEVCC Balans dynamisch prijs"], utc(hm), SPAARZAAM) == verwacht
+
+
+def test_spaarzaam_export():
+    assert rest(REST_BINARY["BEVCC aFRR-exportsessie"], utc("10:50"), SPAARZAAM) == "True"
+    assert rest(REST_BINARY["BEVCC dynamische export"], utc("10:50"), SPAARZAAM) == "False"
+    # geen onbalansprijs meer, en (nog) geen exportprijs in de sessie: niet beschikbaar
+    for hm in ("10:05", "10:50", "11:05"):
+        assert rest(REST_SENSOR["BEVCC Balans exportprijs"], utc(hm), SPAARZAAM) == "unavailable"
+    # Geeft Balans in een exportsessie wel afrr_export (zoals afrr_import bij import), dan telt die
+    import copy
+    data = copy.deepcopy(SPAARZAAM)
+    data["prices"][3]["values"] = {"afrr_export": 4.17}
+    assert rest(REST_SENSOR["BEVCC Balans exportprijs"], utc("10:50"), data) == "4.17"
+
+
 # --- TenneT-onbalansprijs (command_line) -------------------------------------
 
 def _scraper_code():
@@ -131,17 +257,53 @@ def test_tenergy_scraper_duizendtallen_en_negatief():
     assert scrape(html) == {"afnemen": 1234.56, "invoeden": -12.5, "tijd": "12:15"}
 
 
+def test_tenergy_scraper_unicode_minteken():
+    # Negatieve prijzen met een typografisch minteken (U+2212) of gedachtestreepje
+    html = (ha.FIXTURES / "tenergy_onbalans.html").read_text(encoding="utf-8")
+    html = html.replace(">214,90<", ">\u2212412,30<", 1).replace(">33,70<", ">\u20131.234,50<", 1)
+    assert scrape(html) == {"afnemen": -412.3, "invoeden": -1234.5, "tijd": "12:16"}
+
+
 @pytest.mark.parametrize("html", ["", "<html>onderhoud</html>"])
 def test_tenergy_scraper_leeg_bij_storing(html):
     assert scrape(html) == {}
 
 
+TENNET = ha.CFG["command_line"][0]["sensor"]
+
+
+def tennet_actueel(nu, tijd):
+    ha.set_now(utc(nu))
+    data = {"afnemen": 214.9, "invoeden": 33.7}
+    if tijd is not None:
+        data["tijd"] = tijd
+    return ha.truthy(ha.render(TENNET["availability"], strict=True, value_json=data))
+
+
 def test_tennet_availability():
-    item = ha.CFG["command_line"][0]["sensor"]
-    assert ha.truthy(ha.render(item["availability"], strict=True, value_json={"afnemen": 214.9}))
-    assert not ha.truthy(ha.render(item["availability"], strict=True, value_json={}))
-    assert not ha.truthy(ha.render(item["availability"], strict=True))  # geen JSON
-    assert ha.render(item["value_template"], value_json={"afnemen": 214.9}) == "214.9"
+    ha.set_now(utc("12:18"))
+    assert ha.truthy(ha.render(TENNET["availability"], strict=True,
+                               value_json={"afnemen": 214.9, "invoeden": 33.7, "tijd": "12:16"}))
+    assert not ha.truthy(ha.render(TENNET["availability"], strict=True, value_json={}))
+    assert not ha.truthy(ha.render(TENNET["availability"], strict=True))  # geen JSON
+    assert ha.render(TENNET["value_template"], value_json={"afnemen": 214.9}) == "214.9"
+
+
+@pytest.mark.parametrize("nu, tijd, actueel", [
+    ("12:18", "12:16", True),     # normaal: ~2 min achter
+    ("12:26", "12:16", True),     # 10 min: nog net
+    ("12:27", "12:16", False),    # 11 min: verouderd, de pagina staat stil
+    ("15:00", "12:16", False),
+    ("12:14", "12:16", True),     # klok van Home Assistant 2 min achter
+    ("12:10", "12:16", False),    # 6 min 'in de toekomst': niet te vertrouwen
+    ("00:03", "23:58", True),     # rond middernacht
+    ("00:20", "23:58", False),
+    ("12:18", None, False),       # geen tijd
+    ("12:18", "--", False),
+    ("12:18", "12:16:30", False),
+])
+def test_tennet_verouderd(nu, tijd, actueel):
+    assert tennet_actueel(nu, tijd) is actueel
 
 
 # --- Gecombineerde afnameprijs -----------------------------------------------
@@ -236,6 +398,53 @@ def test_boostprijs():
 
 def test_prijspiek_waarde():
     assert combo(afnemen=4168.1, invoeden=4168.1)[0] == "5.17425"
+
+
+EXPORT = ha.find("sensor", "BEVCC exportprijs")
+
+
+def exportprijs(sessie="off", afnemen=None, invoeden=None, balans=None, dyn_export="off", tennet_state=None):
+    """(all-in staat, attribuut kaal, attribuut bron) van sensor.bevcc_exportprijs."""
+    attrs = {k: v for k, v in (("afnemen", afnemen), ("invoeden", invoeden)) if v is not None}
+    db = {
+        "binary_sensor.bevcc_afrr_exportsessie": S(sessie),
+        "binary_sensor.bevcc_dynamische_export": S(dyn_export),
+        "sensor.bevcc_tennet_onbalans": S(tennet_state or (afnemen if afnemen is not None else "unavailable"), attrs),
+        "sensor.bevcc_balans_exportprijs": S("unavailable" if balans is None else balans),
+        "input_number.bevcc_energiebelasting": S(0.11085),
+        "input_number.bevcc_leverkosten": S(0.02),
+    }
+    bron = ha.render(EXPORT["attributes"]["bron"], db)
+    if not ha.truthy(ha.render(EXPORT["availability"], db)):
+        return "unavailable", None, bron
+    staat = float(ha.render(EXPORT["state"], db))
+    kaal = ha.native(ha.render(EXPORT["attributes"]["kaal"], db))
+    return staat, kaal, bron
+
+
+def allin(kaal):
+    return pytest.approx(kaal * 1.21 + VAST, abs=1e-5)
+
+
+def test_exportprijs():
+    # aFRR-exportsessie = opregelen: TenneT 'Afnemen'
+    assert exportprijs("on", afnemen=254.0, invoeden=150.0, balans=0.24) == (allin(0.254), 0.254, "aFRR-export (TenneT afnemen)")
+    # andere teruglevering: TenneT 'Invoeden'
+    assert exportprijs(afnemen=254.0, invoeden=150.0, balans=0.24) == (allin(0.15), 0.15, "onbalans (TenneT invoeden)")
+    assert exportprijs(afnemen=254.0, invoeden=-12.5) == (allin(-0.0125), -0.0125, "onbalans (TenneT invoeden)")
+    # TenneT weg: de exportprijs van Balans
+    assert exportprijs("on", balans=0.27) == (allin(0.27), 0.27, "aFRR-export (Balans)")
+    assert exportprijs(balans=0.08) == (allin(0.08), 0.08, "Balans kwartierprijs export")
+    assert exportprijs(afnemen=254.0, invoeden=150.0, tennet_state="unavailable", balans=0.08)[:2] == (allin(0.08), 0.08)
+    # niets bekend, of een dynamisch exportplan (prijs niet in de API)
+    assert exportprijs() == ("unavailable", None, "onbekend")
+    assert exportprijs(afnemen=254.0, invoeden=150.0, dyn_export="on") == ("unavailable", None, "dynamische export (prijs onbekend)")
+
+
+def test_exportprijs_zelfde_formule_als_afnameprijs():
+    # 0,40 all-in = (0,40 - 0,02 - 0,11085) / 1,21 = 0,2224 kaal, ook voor export
+    assert exportprijs(invoeden=222.44, afnemen=222.44)[0] == pytest.approx(0.40, abs=1e-4)
+    assert combo(afnemen=222.44, invoeden=222.44)[0] == "0.4"
 
 
 # --- Versiecontrole ----------------------------------------------------------

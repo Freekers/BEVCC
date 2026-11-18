@@ -5,6 +5,65 @@ Alle noemenswaardige wijzigingen in BEVCC. Versies volgen
 (2.0.0) betekent dat je iets moet aanpassen (bijvoorbeeld in secrets.yaml of je
 dashboard); dat staat dan bij die versie.
 
+## [1.4.0] - 2026-11-17
+
+Laadstroom regelen tijdens een boost, en boosten bij goedkope teruglevering. Beide staan
+standaard uit; zonder ze aan te zetten werkt BEVCC zoals in 1.3.
+
+### Toegevoegd
+
+- **Laadstroom regelen bij boost** (`input_boolean.bevcc_laadstroom_regelen`): tijdens een
+  boost zet BEVCC de maximale laadstroom van EVCC
+  (`select.<prefix>_<laadpunt>_max_current`) zo, dat de auto niet meer neemt dan er naar de
+  thuisaccu gaat. Zo ontlaadt een auto van 10 kW de thuisaccu niet meer tijdens een import
+  van 5 kW. Na de boost komt de oorspronkelijke maximale stroom terug. Met de regeling
+  start een boost alleen als de auto minstens op zijn minimale stroom kan laden, en stopt
+  hij als de thuisaccu toch 2 minuten lang meer dan 1 kW ontlaadt.
+- **Boost bij export** (`input_number.bevcc_boost_export_onder`, all-in): verkoopt het EMS
+  stroom uit de thuisaccu voor deze prijs of minder, dan zet BEVCC EVCC op Snel zodat de
+  auto die stroom krijgt. Met `input_boolean.bevcc_boost_export_negeer_ondergrens` geldt de
+  accu-ondergrens daarbij niet. De boost loopt door zolang het net nog meer dan 0,2 kW
+  terugkrijgt: buiten de handel dekt het EMS de auto ook uit de thuisaccu, en dat is alleen
+  van een teruglevering te onderscheiden zolang er iets teruggeleverd wordt.
+- Nieuwe entiteiten: `binary_sensor.bevcc_afrr_exportsessie`,
+  `binary_sensor.bevcc_dynamische_export`, `sensor.bevcc_balans_exportprijs`,
+  `sensor.bevcc_exportprijs` (all-in, zelfde formule als de afnameprijs; attribuut `kaal`),
+  `binary_sensor.bevcc_ems_export`,
+  `binary_sensor.bevcc_goedkope_export`, `sensor.bevcc_laadstroom_doel`,
+  `select.bevcc_evcc_max_laadstroom`, `sensor.bevcc_min_laadstroom`,
+  `sensor.bevcc_laadfasen` en de automatisering *BEVCC laadstroomregeling*.
+- `sensor.bevcc_doel` heeft het attribuut `reden` (`import` of `export`).
+
+### Gewijzigd
+
+- **Balans-API van 18 november 2026.** Balans geeft alleen nog de prijzen die voor jouw EMS
+  gelden (aFRR-importprijs tijdens een sessie, dynamische prijs), niet meer de
+  onbalansprijzen. Daardoor was `sensor.bevcc_balans_kwartierprijs` altijd *niet
+  beschikbaar* (ook in 1.3). Die toont nu weer de prijs van Balans tijdens een aFRR-sessie
+  of dynamische import; daarbuiten is hij niet beschikbaar. De sessieherkenning en de
+  live TenneT-prijzen werkten gewoon door. Valt TenneT weg buiten een sessie of dynamische
+  import, dan heeft BEVCC geen terugvalprijs meer en doet het niets.
+- **Verouderde TenneT-prijs telt niet.** Is de nieuwste minuut op de onbalanspagina meer dan
+  10 minuten oud, dan is `sensor.bevcc_tennet_onbalans` niet beschikbaar en beslist BEVCC
+  niet op een oude prijs. Home Assistant moet daarvoor in de tijdzone Europe/Amsterdam
+  staan.
+- **Boost aan/uit met een schakelaar** (`input_boolean.bevcc_boost_import`,
+  `input_boolean.bevcc_boost_export`) in plaats van *Boost onder* op − € 0,50. Prijzen
+  kunnen negatief zijn (bij onbalans soms honderden euro's per MWh onder nul), dus elke
+  grens is een geldige prijs. *Boost onder* en *Boost bij export onder* mogen nu tot
+  − € 2,00 all-in: zo kun je bijvoorbeeld alleen boosten als je betaald krijgt om af te
+  nemen.
+- Bijwerken gaat vanzelf: na de herstart staat *Boost bij goedkope import* aan als boost in
+  1.3 aan stond (ook met een negatieve grens). Stond *Boost onder* op − € 0,50 (uit), dan
+  gaat de schakelaar uit en krijgt de grens weer € 0,20. Nieuwe instellingen krijgen voortaan
+  eenmalig een beginwaarde (`input_text.bevcc_instellingen_versie`).
+- De TenneT-tabel wordt ook gelezen als een negatieve prijs met een typografisch minteken
+  (−) staat.
+- *Boost min. EMS-import* heet nu *Boost min. EMS-vermogen*: het geldt ook voor de start
+  van een boost bij export. Entiteit en waarde blijven hetzelfde.
+- Het logboek noemt ook het laadvermogen van de auto.
+- *Standaardwaarden herstellen* zet ook de nieuwe instellingen uit.
+
 ## [1.3.0] - 2026-11-06
 
 Ondersteuning voor dynamische (day-ahead) import van Balans, in het Balans-dashboard
